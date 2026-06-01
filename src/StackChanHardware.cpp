@@ -49,7 +49,8 @@ StackChanHardware::StackChanHardware()
       directScs_(false),
       servoIdX_(1),
       servoIdY_(2),
-      pitchHome_(200) {}
+      pitchHome_(200),
+      servoYawOffsetDegree_(-5) {}
 
 bool StackChanHardware::begin() {
 #if AIAVATAR_HAS_M5STACKCHAN
@@ -88,6 +89,7 @@ bool StackChanHardware::beginDirectScs(const Config& config) {
     servoIdX_ = config.servoIdX;
     servoIdY_ = config.servoIdY;
     pitchHome_ = config.pitchHome;
+    servoYawOffsetDegree_ = config.servoYawOffsetDegree;
 
     // AI_StackChan_Ex's takao_base=true path disables CoreS3 EXT output because
     // the Takao base supplies servo power from the base side.
@@ -96,9 +98,9 @@ bool StackChanHardware::beginDirectScs(const Config& config) {
 
     active_ = true;
     directScs_ = true;
-    Serial.printf("[StackChan] direct SCS initialized rx=%u tx=%u idX=%u idY=%u takaoBase=%d\n",
+    Serial.printf("[StackChan] direct SCS initialized rx=%u tx=%u idX=%u idY=%u yawOffset=%d takaoBase=%d\n",
                   config.servoRxPin, config.servoTxPin, servoIdX_, servoIdY_,
-                  config.takaoBase ? 1 : 0);
+                  servoYawOffsetDegree_, config.takaoBase ? 1 : 0);
     return true;
 }
 
@@ -127,7 +129,7 @@ void StackChanHardware::update() {
 void StackChanHardware::moveMotion(int16_t yaw, int16_t pitch, uint16_t speed) {
     if (!active_) return;
     if (directScs_) {
-        int16_t yawDegree = kScsHomeDegree + yaw / 6;
+        int16_t yawDegree = kScsHomeDegree + servoYawOffsetDegree_ + yaw / 6;
         yawDegree = constrain(yawDegree, kScsHomeDegree - kScsYawLimitDegree,
                               kScsHomeDegree + kScsYawLimitDegree);
 

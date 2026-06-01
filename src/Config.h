@@ -74,6 +74,7 @@ struct Config {
     uint8_t servoTxPin;
     uint8_t servoIdX;
     uint8_t servoIdY;
+    int16_t servoYawOffsetDegree;
     bool takaoBase;
     char nadeInvokePrompt[kInvokePromptMaxLen];
     char visionInvokePrompt[kInvokePromptMaxLen];

@@ -55,6 +55,7 @@ Config::Config()
       servoTxPin(1),
       servoIdX(1),
       servoIdY(2),
+      servoYawOffsetDegree(-5),
       takaoBase(true),
       debugLog(false) {
     wifiSsid[0] = '\0';
@@ -192,6 +193,7 @@ bool Config::loadFromSD(const char* path) {
     servoTxPin = doc["servo_tx_pin"] | servoTxPin;
     servoIdX = doc["servo_id_x"] | servoIdX;
     servoIdY = doc["servo_id_y"] | servoIdY;
+    servoYawOffsetDegree = doc["servo_yaw_offset_degree"] | servoYawOffsetDegree;
     takaoBase = doc["takao_base"] | takaoBase;
     strlcpy(nadeInvokePrompt, doc["nade_invoke_prompt"] | nadeInvokePrompt,
             sizeof(nadeInvokePrompt));

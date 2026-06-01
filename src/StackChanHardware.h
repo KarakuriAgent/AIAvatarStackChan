@@ -34,6 +34,7 @@ private:
     uint8_t servoIdX_;
     uint8_t servoIdY_;
     int16_t pitchHome_;
+    int16_t servoYawOffsetDegree_;
 
     bool beginDirectScs(const Config& config);
     void writeScsPosition(uint8_t id, uint16_t position, uint16_t timeMs, uint16_t speed);
