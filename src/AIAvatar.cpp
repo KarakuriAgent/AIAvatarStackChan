@@ -62,6 +62,14 @@ bool AIAvatar::useStackChan() {
     return true;
 }
 
+bool AIAvatar::useStackChan(const Config& config) {
+    if (!stackChanHardware_.begin(config)) return false;
+    stackChanHardwareEnabled_ = true;
+    motion_.setHardware(&stackChanHardware_);
+    leds_.setHardware(&stackChanHardware_);
+    return true;
+}
+
 bool AIAvatar::begin(const Config& config) {
     s_instance = this;
     config_ = config;
@@ -139,8 +147,12 @@ bool AIAvatar::begin(const Config& config) {
     ws_.onToolCall(AIAvatar::onToolCallStatic);
     ws_.onVision(AIAvatar::onVisionStatic);
     ws_.onAccepted(AIAvatar::onAcceptedStatic);
-    ws_.begin(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
-              config_.wsReconnectIntervalMs, config_.channel);
+    if (config_.wsHost[0] != '\0') {
+        ws_.begin(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
+                  config_.wsReconnectIntervalMs, config_.channel);
+    } else {
+        Serial.println("[AIAvatar] WS host is empty; websocket disabled");
+    }
 
     xTaskCreatePinnedToCore(AIAvatar::micTaskFunc, "AIAvatarMic",
                             config_.audioTaskStackSize, this, 1, &micTaskHandle_,
@@ -254,6 +266,7 @@ void AIAvatar::sendStop() {
 }
 
 void AIAvatar::connectWebSocket() {
+    if (config_.wsHost[0] == '\0') return;
     wsConnectPending_ = true;
 }
 
@@ -431,6 +444,10 @@ void AIAvatar::runSpeakerPlayback() {
 
 void AIAvatar::runWebSocket() {
     for (;;) {
+        if (config_.wsHost[0] == '\0') {
+            delay(100);
+            continue;
+        }
         if (wsDisconnectPending_) {
             wsDisconnectPending_ = false;
             ws_.disconnect();

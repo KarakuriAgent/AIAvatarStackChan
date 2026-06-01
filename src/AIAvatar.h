@@ -30,6 +30,7 @@ public:
 
     bool begin(const Config& config);
     bool useStackChan();
+    bool useStackChan(const Config& config);
     void update();
     void setVolume(uint8_t volume);
     void setVolumeLevel(uint8_t levelIndex);

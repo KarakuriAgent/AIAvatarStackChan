@@ -1,0 +1,12 @@
+{
+  "name": "AIAvatarStackChan",
+  "version": "0.1.0",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": [
+    { "owner": "m5stack", "name": "M5Unified", "version": "^0.2.15" },
+    { "owner": "bblanchon", "name": "ArduinoJson", "version": "^7.0.0" },
+    { "owner": "links2004", "name": "WebSockets" },
+    { "url": "https://github.com/m5stack/StackChan-BSP.git#1.0.1" }
+  ]
+}

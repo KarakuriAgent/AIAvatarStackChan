@@ -30,12 +30,11 @@ void setup() {
     }
 
     if (config.wsHost[0] == '\0') {
-        Serial.println("[Main] WS host is empty; check /config.json");
-        while (true) delay(1000);
+        Serial.println("[Main] WS host is empty; running hardware/display only");
     }
 
-    // Remove `avatar.useStackChan()` if you want to run CoreS3 without Stack-chan hardware
-    avatar.useStackChan();
+    // Remove `avatar.useStackChan(config)` if you want to run CoreS3 without Stack-chan hardware
+    avatar.useStackChan(config);
 
     if (!avatar.begin(config)) {
         Serial.println("[Main] AIAvatar init failed");

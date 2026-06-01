@@ -51,6 +51,11 @@ Config::Config()
       pttHoldThresholdMs(200),
       pitchHome(200),
       stackChanAutoAngleSync(true),
+      servoRxPin(2),
+      servoTxPin(1),
+      servoIdX(1),
+      servoIdY(2),
+      takaoBase(true),
       debugLog(false) {
     wifiSsid[0] = '\0';
     wifiPass[0] = '\0';
@@ -59,6 +64,7 @@ Config::Config()
     strlcpy(userId, "default", sizeof(userId));
     channel[0] = '\0';
     strlcpy(timezone, "JST-9", sizeof(timezone));
+    strlcpy(servoType, "SCS0009", sizeof(servoType));
     strlcpy(nadeInvokePrompt,
             "$The user gently patted your head. React with one very short phrase. "
             "If they pat you too often in a short time, you may sound a little annoyed or shy. "
@@ -181,6 +187,12 @@ bool Config::loadFromSD(const char* path) {
     pttHoldThresholdMs = doc["ptt_hold_threshold_ms"] | pttHoldThresholdMs;
     pitchHome = doc["pitch_home"] | pitchHome;
     stackChanAutoAngleSync = doc["stackchan_auto_angle_sync"] | stackChanAutoAngleSync;
+    strlcpy(servoType, doc["servo_type"] | servoType, sizeof(servoType));
+    servoRxPin = doc["servo_rx_pin"] | servoRxPin;
+    servoTxPin = doc["servo_tx_pin"] | servoTxPin;
+    servoIdX = doc["servo_id_x"] | servoIdX;
+    servoIdY = doc["servo_id_y"] | servoIdY;
+    takaoBase = doc["takao_base"] | takaoBase;
     strlcpy(nadeInvokePrompt, doc["nade_invoke_prompt"] | nadeInvokePrompt,
             sizeof(nadeInvokePrompt));
     strlcpy(visionInvokePrompt, doc["vision_invoke_prompt"] | visionInvokePrompt,

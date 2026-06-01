@@ -69,6 +69,12 @@ struct Config {
     uint32_t pttHoldThresholdMs;
     int16_t pitchHome;
     bool stackChanAutoAngleSync;
+    char servoType[16];
+    uint8_t servoRxPin;
+    uint8_t servoTxPin;
+    uint8_t servoIdX;
+    uint8_t servoIdY;
+    bool takaoBase;
     char nadeInvokePrompt[kInvokePromptMaxLen];
     char visionInvokePrompt[kInvokePromptMaxLen];
 
