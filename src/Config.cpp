@@ -64,6 +64,7 @@ Config::Config()
     strlcpy(wsPath, "/ws", sizeof(wsPath));
     strlcpy(userId, "default", sizeof(userId));
     channel[0] = '\0';
+    apiKey[0] = '\0';
     strlcpy(timezone, "JST-9", sizeof(timezone));
     strlcpy(servoType, "SCS0009", sizeof(servoType));
     strlcpy(nadeInvokePrompt,
@@ -137,6 +138,7 @@ bool Config::loadFromSD(const char* path) {
     strlcpy(wsPath, doc["ws_path"] | wsPath, sizeof(wsPath));
     strlcpy(userId, doc["user_id"] | userId, sizeof(userId));
     strlcpy(channel, doc["channel"] | channel, sizeof(channel));
+    strlcpy(apiKey, doc["api_key"] | apiKey, sizeof(apiKey));
     strlcpy(timezone, doc["timezone"] | timezone, sizeof(timezone));
 
     micSampleRate = doc["mic_sample_rate"] | micSampleRate;

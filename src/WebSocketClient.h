@@ -63,9 +63,11 @@ public:
     void setUploadPcmFormat(uint32_t sampleRate, uint8_t channels);
 
     void begin(const char* host, uint16_t port, const char* path, const char* userId,
-               uint32_t reconnectIntervalMs = 5000, const char* channel = nullptr);
+               uint32_t reconnectIntervalMs = 5000, const char* channel = nullptr,
+               const char* apiKey = nullptr);
     void reconnect(const char* host, uint16_t port, const char* path, const char* userId,
-                   uint32_t reconnectIntervalMs = 5000, const char* channel = nullptr);
+                   uint32_t reconnectIntervalMs = 5000, const char* channel = nullptr,
+                   const char* apiKey = nullptr);
     void disconnect();
     void loop();
 
@@ -85,6 +87,8 @@ private:
     char sessionId_[37];
     char userId_[64];
     char channel_[32];
+    char apiKey_[512];
+    char authValue_[540];
 
     ConnectionCallback connectionCb_;
     AudioChunkCallback audioChunkCb_;
@@ -119,6 +123,7 @@ private:
     uint32_t lastAudioSendMs_;
 
     void generateSessionId();
+    void applyAuthHeader();
     void sendStart();
     bool pumpAudioUpload();
     void pumpKeepalive();

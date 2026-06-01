@@ -34,6 +34,7 @@ struct Config {
     char userId[64];
     char channel[32];
     char timezone[48];
+    char apiKey[512];
     WifiNetworkConfig wifiNetworks[kMaxWifiNetworks];
     uint8_t wifiNetworkCount;
 

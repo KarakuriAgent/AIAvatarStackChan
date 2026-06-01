@@ -149,7 +149,7 @@ bool AIAvatar::begin(const Config& config) {
     ws_.onAccepted(AIAvatar::onAcceptedStatic);
     if (config_.wsHost[0] != '\0') {
         ws_.begin(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
-                  config_.wsReconnectIntervalMs, config_.channel);
+                  config_.wsReconnectIntervalMs, config_.channel, config_.apiKey);
     } else {
         Serial.println("[AIAvatar] WS host is empty; websocket disabled");
     }
@@ -455,7 +455,7 @@ void AIAvatar::runWebSocket() {
         if (wsConnectPending_) {
             wsConnectPending_ = false;
             ws_.reconnect(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
-                          config_.wsReconnectIntervalMs, config_.channel);
+                          config_.wsReconnectIntervalMs, config_.channel, config_.apiKey);
         }
         if (wsStopPending_) {
             wsStopPending_ = false;

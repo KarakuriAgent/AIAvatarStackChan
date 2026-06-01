@@ -62,6 +62,8 @@ WebSocketClient::WebSocketClient()
     sessionId_[0] = '\0';
     userId_[0] = '\0';
     channel_[0] = '\0';
+    apiKey_[0] = '\0';
+    authValue_[0] = '\0';
 }
 
 bool WebSocketClient::configureAudioUpload(const AudioFrameProvider& provider,
@@ -94,27 +96,31 @@ void WebSocketClient::setUploadPcmFormat(uint32_t sampleRate, uint8_t channels) 
 
 void WebSocketClient::begin(const char* host, uint16_t port, const char* path,
                             const char* userId, uint32_t reconnectIntervalMs,
-                            const char* channel) {
+                            const char* channel, const char* apiKey) {
     s_wsInstance = this;
     autoReconnectEnabled_ = true;
     strlcpy(userId_, userId ? userId : "", sizeof(userId_));
     strlcpy(channel_, channel ? channel : "", sizeof(channel_));
-    Serial.printf("[WS] begin %s://%s:%u%s\n", useTlsForPort(port) ? "wss" : "ws", host, port, path);
+    strlcpy(apiKey_, apiKey ? apiKey : "", sizeof(apiKey_));
+    Serial.printf("[WS] begin %s://%s:%u%s auth=%s keyLen=%u\n", useTlsForPort(port) ? "wss" : "ws", host, port, path, apiKey_[0] ? "bearer" : "none", static_cast<unsigned>(strlen(apiKey_)));
     beginWebSocket(ws_, host, port, path);
+    applyAuthHeader();
     ws_.onEvent(WebSocketClient::onEventStatic);
     ws_.setReconnectInterval(reconnectIntervalMs);
 }
 
 void WebSocketClient::reconnect(const char* host, uint16_t port, const char* path,
                                 const char* userId, uint32_t reconnectIntervalMs,
-                                const char* channel) {
+                                const char* channel, const char* apiKey) {
     autoReconnectEnabled_ = true;
     strlcpy(userId_, userId ? userId : "", sizeof(userId_));
     strlcpy(channel_, channel ? channel : "", sizeof(channel_));
+    strlcpy(apiKey_, apiKey ? apiKey : "", sizeof(apiKey_));
     ws_.disconnect();
     delay(100);
-    Serial.printf("[WS] reconnect %s://%s:%u%s\n", useTlsForPort(port) ? "wss" : "ws", host, port, path);
+    Serial.printf("[WS] reconnect %s://%s:%u%s auth=%s keyLen=%u\n", useTlsForPort(port) ? "wss" : "ws", host, port, path, apiKey_[0] ? "bearer" : "none", static_cast<unsigned>(strlen(apiKey_)));
     beginWebSocket(ws_, host, port, path);
+    applyAuthHeader();
     ws_.onEvent(WebSocketClient::onEventStatic);
     ws_.setReconnectInterval(reconnectIntervalMs);
 }
@@ -130,6 +136,16 @@ void WebSocketClient::loop() {
     ws_.loop();
     if (!pumpAudioUpload()) {
         pumpKeepalive();
+    }
+}
+
+void WebSocketClient::applyAuthHeader() {
+    if (apiKey_[0]) {
+        snprintf(authValue_, sizeof(authValue_), "Bearer %s", apiKey_);
+        ws_.setAuthorization(authValue_);
+    } else {
+        authValue_[0] = '\0';
+        ws_.setAuthorization("");
     }
 }
 
@@ -543,10 +559,14 @@ void WebSocketClient::onEvent(WStype_t type, uint8_t* payload, size_t length) {
 
         case WStype_DISCONNECTED:
             connected_ = false;
-            Serial.println("[WS] disconnected");
+            Serial.printf("[WS] disconnected len=%u reason=%.*s\n", static_cast<unsigned>(length), static_cast<int>(length), payload ? reinterpret_cast<const char*>(payload) : "");
             if (processingCb_) processingCb_(false);
             if (stopCb_) stopCb_();
             if (connectionCb_) connectionCb_(false);
+            break;
+
+        case WStype_ERROR:
+            Serial.printf("[WS] error len=%u %.*s\n", static_cast<unsigned>(length), static_cast<int>(length), payload ? reinterpret_cast<const char*>(payload) : "");
             break;
 
         case WStype_TEXT: {
