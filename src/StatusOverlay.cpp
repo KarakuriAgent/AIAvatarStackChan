@@ -23,7 +23,6 @@ void StatusOverlay::draw(LGFX_Sprite* canvas) const {
     drawClock(canvas, state_.hour, state_.minute);
     drawMicIcon(canvas, state_.micMuted);
     drawWiFiIcon(canvas, state_.wifiConnected, state_.websocketConnected);
-    drawBatteryIcon(canvas, state_.batteryLevel, state_.batteryCharging);
     if (state_.volumeVisible) {
         drawVolumeIndicator(canvas, state_.volumeLevel, state_.volumeLevelCount);
     }
@@ -36,8 +35,6 @@ bool StatusOverlay::equals(const StatusOverlayState& a, const StatusOverlayState
            a.volumeLevelCount == b.volumeLevelCount &&
            a.wifiConnected == b.wifiConnected &&
            a.websocketConnected == b.websocketConnected &&
-           a.batteryLevel == b.batteryLevel &&
-           a.batteryCharging == b.batteryCharging &&
            a.hour == b.hour &&
            a.minute == b.minute;
 }
@@ -47,7 +44,7 @@ void StatusOverlay::drawClock(LGFX_Sprite* canvas, uint8_t hour, uint8_t minute)
     snprintf(buf, sizeof(buf), "%02u:%02u", hour, minute);
 
     const int x = 18;
-    const int y = 6;
+    const int y = 14;
     canvas->setFont(nullptr);
     canvas->setTextSize(3);
     canvas->setTextDatum(top_left);
@@ -63,8 +60,8 @@ void StatusOverlay::drawClock(LGFX_Sprite* canvas, uint8_t hour, uint8_t minute)
 }
 
 void StatusOverlay::drawMicIcon(LGFX_Sprite* canvas, bool muted) {
-    const int x = 228;
-    const int y = 4;
+    const int x = 250;
+    const int y = 12;
     const int cx = x + 14;
     const int cy = y + 12;
 
@@ -81,8 +78,8 @@ void StatusOverlay::drawMicIcon(LGFX_Sprite* canvas, bool muted) {
 }
 
 void StatusOverlay::drawWiFiIcon(LGFX_Sprite* canvas, bool wifiConnected, bool wsConnected) {
-    const int x = 258;
-    const int y = 4;
+    const int x = 280;
+    const int y = 12;
     const int cx = x + 14;
     const int by = y + 19;
 
@@ -111,40 +108,6 @@ void StatusOverlay::drawWiFiIcon(LGFX_Sprite* canvas, bool wifiConnected, bool w
     if (!wifiConnected) {
         canvas->drawLine(x + 4, y + 24, x + 24, y + 4, TFT_RED);
         canvas->drawLine(x + 5, y + 24, x + 25, y + 4, TFT_RED);
-    }
-}
-
-void StatusOverlay::drawBatteryIcon(LGFX_Sprite* canvas, int8_t level, bool charging) {
-    const int x = 288;
-    const int y = 4;
-    canvas->fillRoundRect(x, y, 28, 28, 6, 0x2104);
-
-    const uint16_t outline = 0xC618;
-    canvas->drawRoundRect(x + 3, y + 8, 18, 12, 2, outline);
-    canvas->fillRect(x + 21, y + 11, 3, 6, outline);
-
-    if (level < 0) {
-        canvas->setTextColor(outline);
-        canvas->setTextSize(1);
-        canvas->drawChar('?', x + 9, y + 10);
-        return;
-    }
-
-    uint16_t fillColor;
-    if (level >= 50) fillColor = TFT_GREEN;
-    else if (level >= 20) fillColor = TFT_YELLOW;
-    else fillColor = TFT_RED;
-
-    int fillW = static_cast<int>(level) * 14 / 100;
-    if (fillW < 1 && level > 0) fillW = 1;
-    if (fillW > 0) canvas->fillRect(x + 5, y + 10, fillW, 8, fillColor);
-
-    if (charging) {
-        const uint16_t boltColor = TFT_WHITE;
-        int cx = x + 12;
-        int cy = y + 14;
-        canvas->fillTriangle(cx + 3, cy - 6, cx - 3, cy, cx + 1, cy, boltColor);
-        canvas->fillTriangle(cx - 1, cy, cx + 3, cy, cx - 3, cy + 6, boltColor);
     }
 }
 

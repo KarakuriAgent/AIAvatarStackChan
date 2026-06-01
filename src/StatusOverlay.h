@@ -37,9 +37,8 @@ public:
     bool enabled() const { return enabled_; }
     bool update(const StatusOverlayState& state);
     void draw(LGFX_Sprite* canvas) const;
-    UiRect micBounds() const { return {224, 0, 37, 37}; }
-    UiRect networkBounds() const { return {254, 0, 37, 37}; }
-    UiRect batteryBounds() const { return {288, 4, 28, 28}; }
+    UiRect micBounds() const { return {246, 8, 37, 37}; }
+    UiRect networkBounds() const { return {276, 8, 37, 37}; }
     UiRect volumeTapBounds() const { return {0, 190, 72, 50}; }
 
 private:
@@ -49,7 +48,6 @@ private:
 
     static bool equals(const StatusOverlayState& a, const StatusOverlayState& b);
     static void drawClock(LGFX_Sprite* canvas, uint8_t hour, uint8_t minute);
-    static void drawBatteryIcon(LGFX_Sprite* canvas, int8_t level, bool charging);
     static void drawWiFiIcon(LGFX_Sprite* canvas, bool wifiConnected, bool wsConnected);
     static void drawMicIcon(LGFX_Sprite* canvas, bool muted);
     static void drawVolumeIndicator(LGFX_Sprite* canvas, uint8_t level, uint8_t levelCount);
