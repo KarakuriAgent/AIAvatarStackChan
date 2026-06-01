@@ -85,7 +85,7 @@ private:
     UiRect menuBounds() const;
     int8_t menuIndexAt(int16_t x, int16_t y) const;
     bool consumeTap(const m5::touch_detail_t& detail, int16_t& x, int16_t& y);
-    bool isSystemBarTouch(int16_t y) const { return y <= 36; }
+    bool isSystemBarTouch(int16_t y) const { return y <= 44; }
 };
 
 }  // namespace aiavatar

@@ -115,6 +115,10 @@ void StackChanHardware::setAutoAngleSyncEnabled(bool enabled) {
 }
 
 void StackChanHardware::update() {
+    if (active_ && directScs_) {
+        M5.update();
+        return;
+    }
 #if AIAVATAR_HAS_M5STACKCHAN
     if (active_ && !directScs_) M5StackChan.update();
 #endif
