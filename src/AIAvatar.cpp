@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -63,7 +64,14 @@ bool AIAvatar::useStackChan() {
 }
 
 bool AIAvatar::begin(const Config& config) {
+    ResourceProvider resources;
+    resources.useSD(true);
+    return begin(config, resources);
+}
+
+bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     s_instance = this;
+    defaultResources_ = resources;
     config_ = config;
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
     volume_ = config_.volumeLevels[volumeLevelIndex_];
@@ -78,6 +86,7 @@ bool AIAvatar::begin(const Config& config) {
         return false;
     }
     speaker_.setVolume(volume_);
+    display_.setResourceProvider(&defaultResources_);
     if (!display_.begin(config_.displayRotation, config_.displayBrightness)) {
         Serial.println("[AIAvatar] display init failed");
     } else if (!face_.begin(display_)) {
@@ -93,6 +102,7 @@ bool AIAvatar::begin(const Config& config) {
         camera_.begin();
     }
     openClaw_.begin(display_, leds_);
+    openClaw_.preload();
     display_.onOverlay(AIAvatar::drawOverlayStatic);
 
     mic_.configure(config_.micSampleRate, config_.micMagnification, config_.micBufferSamples);
@@ -151,6 +161,7 @@ bool AIAvatar::begin(const Config& config) {
     xTaskCreatePinnedToCore(AIAvatar::wsTaskFunc, "AIAvatarWS",
                             config_.wsTaskStackSize, this, 1, &wsTaskHandle_,
                             config_.wsTaskCore);
+    logMemoryUsage("after begin");
     return true;
 }
 
@@ -222,6 +233,7 @@ bool AIAvatar::startPushToTalk() {
 void AIAvatar::endPushToTalk() {
     if (!pushToTalkActive_) return;
     pushToTalkActive_ = false;
+    visualEffects_.clearVoiceDetected();
 
     size_t samples = pttBufPos_;
     size_t minSamples = static_cast<size_t>(config_.pttMinSeconds * config_.micSampleRate);
@@ -308,8 +320,9 @@ void AIAvatar::runMicCapture() {
         if (mic_.read(micBuf, config_.micBufferSamples)) {
             if (pushToTalkActive_) {
                 if (hasSpeech(micBuf, config_.micBufferSamples)) {
-                    visualEffects_.showVoiceDetected(350);
-                    display_.setDirty();
+                    if (visualEffects_.showVoiceDetected(350)) {
+                        display_.setDirty();
+                    }
                 }
                 size_t pos = pttBufPos_;
                 if (pos + config_.micBufferSamples <= pttBufCapacity_) {
@@ -332,8 +345,9 @@ void AIAvatar::runMicCapture() {
             if (!micMuted_ && ws_.isConnected() && !serverProcessing_) {
                 uint32_t now = millis();
                 if (hasSpeech(micBuf, config_.micBufferSamples)) {
-                    visualEffects_.showVoiceDetected(350);
-                    display_.setDirty();
+                    if (visualEffects_.showVoiceDetected(350)) {
+                        display_.setDirty();
+                    }
                     if (speechDetectedCb_ && now - lastSpeechDetectedMs >= 300) {
                         lastSpeechDetectedMs = now;
                         speechDetectedCb_();
@@ -521,6 +535,10 @@ void AIAvatar::handleVisionRequest() {
     Serial.printf("[Vision] invoke %s\n", ok ? "sent" : "failed");
 }
 
+bool AIAvatar::invokeText(const char* text) {
+    return queueInvokeText(text);
+}
+
 bool AIAvatar::queueInvokeText(const char* text) {
     if (!invokeTextQueue_ || !text) return false;
     InvokeTextMessage msg = {};
@@ -681,6 +699,41 @@ void AIAvatar::drawVisionPreview(LGFX_Sprite* canvas) {
     if (visionPreviewMutex_) {
         xSemaphoreGive(visionPreviewMutex_);
     }
+}
+
+void AIAvatar::logMemoryUsage(const char* label) const {
+    size_t heapTotal = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+    size_t heapFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    size_t heapMinFree = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+    size_t heapLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+
+    size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    size_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t psramMinFree = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    size_t psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+
+    auto usedPct = [](size_t total, size_t freeBytes) -> float {
+        return total > 0 ? 100.0f * static_cast<float>(total - freeBytes) /
+                               static_cast<float>(total)
+                         : 0.0f;
+    };
+
+    Serial.printf("[Memory] %s heap used=%uKB/%uKB %.1f%% free=%uKB minFree=%uKB largest=%uKB\n",
+                  label ? label : "",
+                  static_cast<unsigned>((heapTotal - heapFree) / 1024),
+                  static_cast<unsigned>(heapTotal / 1024),
+                  usedPct(heapTotal, heapFree),
+                  static_cast<unsigned>(heapFree / 1024),
+                  static_cast<unsigned>(heapMinFree / 1024),
+                  static_cast<unsigned>(heapLargest / 1024));
+    Serial.printf("[Memory] %s psram used=%uKB/%uKB %.1f%% free=%uKB minFree=%uKB largest=%uKB\n",
+                  label ? label : "",
+                  static_cast<unsigned>((psramTotal - psramFree) / 1024),
+                  static_cast<unsigned>(psramTotal / 1024),
+                  usedPct(psramTotal, psramFree),
+                  static_cast<unsigned>(psramFree / 1024),
+                  static_cast<unsigned>(psramMinFree / 1024),
+                  static_cast<unsigned>(psramLargest / 1024));
 }
 
 bool AIAvatar::hasSpeech(const int16_t* samples, size_t sampleCount) const {

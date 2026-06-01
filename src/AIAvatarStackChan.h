@@ -11,6 +11,7 @@
 #include "LedController.h"
 #include "MotionController.h"
 #include "OpenClawEffects.h"
+#include "ResourceProvider.h"
 #include "StatusOverlay.h"
 #include "SystemUIController.h"
 #include "VisualEffects.h"

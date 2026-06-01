@@ -37,8 +37,8 @@ public:
 private:
     ScreenRenderer* display_;
     LGFX_Sprite* faceSprites_[static_cast<uint8_t>(Expression::Count)];
-    LGFX_Sprite* mouthSprites_[static_cast<uint8_t>(MouthShape::Count)];
-    LGFX_Sprite* blinkSprite_;
+    SpriteLayer mouthSprites_[static_cast<uint8_t>(MouthShape::Count)];
+    SpriteLayer blinkSprite_;
 
     volatile Expression currentExpression_;
     MouthShape currentMouth_;

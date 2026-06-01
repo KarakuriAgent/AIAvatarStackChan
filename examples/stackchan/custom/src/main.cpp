@@ -1,11 +1,11 @@
 #include <Arduino.h>
 #include <M5Unified.h>
-#include <SD.h>
 
 #include "AIAvatarStackChan.h"
 #include "UserApp.h"
 
 static aiavatar::Config config;
+static aiavatar::ResourceProvider resources;
 static aiavatar::AIAvatar avatar;
 static UserApp userApp;
 
@@ -24,9 +24,9 @@ void setup() {
     Serial.println("[Main] M5 initialized");
     Serial.printf("[Main] heap=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreePsram());
 
-    if (SD.begin(GPIO_NUM_4, SPI, 25000000)) {
+    if (resources.beginSD(GPIO_NUM_4)) {
         Serial.println("[Main] SD mounted");
-        config.loadFromSD();
+        resources.loadConfig(config);
     } else {
         Serial.println("[Main] SD not available; using built-in defaults");
     }
@@ -41,7 +41,7 @@ void setup() {
 
     userApp.begin(avatar);
 
-    if (!avatar.begin(config)) {
+    if (!avatar.begin(config, resources)) {
         Serial.println("[Main] AIAvatar init failed");
         while (true) delay(1000);
     }

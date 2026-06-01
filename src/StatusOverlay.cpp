@@ -8,7 +8,21 @@ namespace aiavatar {
 StatusOverlay::StatusOverlay()
     : enabled_(true),
       hasState_(false),
-      state_{} {}
+      state_{},
+      layout_{18, 6, top_left, 3,
+              {224, 0, 37, 37},
+              {254, 0, 37, 37},
+              {288, 4, 28, 28},
+              28,
+              0,
+              {0, 190, 72, 50},
+              5},
+      micTapBounds_(layout_.micBounds),
+      networkTapBounds_(layout_.networkBounds),
+      batteryTapBounds_(layout_.batteryBounds),
+      customMicTapBounds_(false),
+      customNetworkTapBounds_(false),
+      customBatteryTapBounds_(false) {}
 
 bool StatusOverlay::update(const StatusOverlayState& state) {
     if (hasState_ && equals(state_, state)) return false;
@@ -42,15 +56,51 @@ bool StatusOverlay::equals(const StatusOverlayState& a, const StatusOverlayState
            a.minute == b.minute;
 }
 
-void StatusOverlay::drawClock(LGFX_Sprite* canvas, uint8_t hour, uint8_t minute) {
+void StatusOverlay::setClockPosition(int16_t x, int16_t y, textdatum_t datum) {
+    layout_.clockX = x;
+    layout_.clockY = y;
+    layout_.clockDatum = datum;
+}
+
+void StatusOverlay::setMicBounds(UiRect bounds) {
+    layout_.micBounds = bounds;
+    if (!customMicTapBounds_) micTapBounds_ = bounds;
+}
+
+void StatusOverlay::setNetworkBounds(UiRect bounds) {
+    layout_.networkBounds = bounds;
+    if (!customNetworkTapBounds_) networkTapBounds_ = bounds;
+}
+
+void StatusOverlay::setBatteryBounds(UiRect bounds) {
+    layout_.batteryBounds = bounds;
+    if (!customBatteryTapBounds_) batteryTapBounds_ = bounds;
+}
+
+void StatusOverlay::setMicTapBounds(UiRect bounds) {
+    micTapBounds_ = bounds;
+    customMicTapBounds_ = true;
+}
+
+void StatusOverlay::setNetworkTapBounds(UiRect bounds) {
+    networkTapBounds_ = bounds;
+    customNetworkTapBounds_ = true;
+}
+
+void StatusOverlay::setBatteryTapBounds(UiRect bounds) {
+    batteryTapBounds_ = bounds;
+    customBatteryTapBounds_ = true;
+}
+
+void StatusOverlay::drawClock(LGFX_Sprite* canvas, uint8_t hour, uint8_t minute) const {
     char buf[6];
     snprintf(buf, sizeof(buf), "%02u:%02u", hour, minute);
 
-    const int x = 18;
-    const int y = 6;
+    const int x = layout_.clockX;
+    const int y = layout_.clockY;
     canvas->setFont(nullptr);
-    canvas->setTextSize(3);
-    canvas->setTextDatum(top_left);
+    canvas->setTextSize(layout_.clockTextSize);
+    canvas->setTextDatum(layout_.clockDatum);
     canvas->setTextColor(TFT_BLACK);
     for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
@@ -62,71 +112,88 @@ void StatusOverlay::drawClock(LGFX_Sprite* canvas, uint8_t hour, uint8_t minute)
     canvas->drawString(buf, x, y);
 }
 
-void StatusOverlay::drawMicIcon(LGFX_Sprite* canvas, bool muted) {
-    const int x = 228;
-    const int y = 4;
-    const int cx = x + 14;
-    const int cy = y + 12;
+void StatusOverlay::drawMicIcon(LGFX_Sprite* canvas, bool muted) const {
+    UiRect bounds = layout_.micBounds;
+    const int s = layout_.iconSize;
+    const int x = bounds.x + (bounds.w - s) / 2;
+    const int y = bounds.y + (bounds.h - s) / 2;
+    const int cx = x + s / 2;
+    const int cy = y + s * 3 / 7;
 
-    canvas->fillRoundRect(x, y, 28, 28, 6, 0x2104);
+    canvas->fillRoundRect(x, y, s, s, std::max(1, s * 3 / 14), 0x2104);
     uint16_t color = muted ? TFT_WHITE : TFT_GREEN;
-    canvas->fillRoundRect(cx - 3, cy - 7, 7, 11, 3, color);
-    canvas->drawRoundRect(cx - 6, cy - 2, 13, 9, 4, color);
-    canvas->drawFastVLine(cx, cy + 7, 3, color);
-    canvas->drawFastHLine(cx - 3, cy + 10, 7, color);
+    canvas->fillRoundRect(cx - s * 3 / 28, cy - s / 4, s / 4, s * 11 / 28,
+                          std::max(1, s * 3 / 28), color);
+    canvas->drawRoundRect(cx - s * 3 / 14, cy - s / 14, s * 13 / 28, s * 9 / 28,
+                          std::max(1, s / 7), color);
+    canvas->drawFastVLine(cx, cy + s / 4, std::max(1, s * 3 / 28), color);
+    canvas->drawFastHLine(cx - s * 3 / 28, cy + s * 5 / 14, s / 4, color);
     if (muted) {
-        canvas->drawLine(x + 4, y + 24, x + 24, y + 4, TFT_WHITE);
-        canvas->drawLine(x + 5, y + 24, x + 25, y + 4, TFT_WHITE);
+        canvas->drawLine(x + s / 7, y + s * 6 / 7, x + s * 6 / 7, y + s / 7, TFT_WHITE);
+        canvas->drawLine(x + s / 7 + 1, y + s * 6 / 7, x + s * 6 / 7 + 1, y + s / 7, TFT_WHITE);
     }
 }
 
-void StatusOverlay::drawWiFiIcon(LGFX_Sprite* canvas, bool wifiConnected, bool wsConnected) {
-    const int x = 258;
-    const int y = 4;
-    const int cx = x + 14;
-    const int by = y + 19;
+void StatusOverlay::drawWiFiIcon(LGFX_Sprite* canvas, bool wifiConnected, bool wsConnected) const {
+    UiRect bounds = layout_.networkBounds;
+    const int s = layout_.iconSize;
+    const int x = bounds.x + (bounds.w - s) / 2;
+    const int y = bounds.y + (bounds.h - s) / 2;
+    const int cx = x + s / 2;
+    const int by = y + s * 19 / 28;
 
-    canvas->fillRoundRect(x, y, 28, 28, 6, 0x2104);
+    canvas->fillRoundRect(x, y, s, s, std::max(1, s * 3 / 14), 0x2104);
     uint16_t color;
     if (!wifiConnected) color = TFT_RED;
     else if (wsConnected) color = TFT_GREEN;
     else color = TFT_WHITE;
 
+    const int stroke = layout_.wifiStrokeRadius;
     for (int a = -50; a <= 50; ++a) {
         float rad = a * 3.14159f / 180.0f;
-        canvas->drawPixel(cx + static_cast<int>(11 * sinf(rad)),
-                          by - static_cast<int>(11 * cosf(rad)), color);
+        int px = cx + static_cast<int>(s * 11 / 28 * sinf(rad));
+        int py = by - static_cast<int>(s * 11 / 28 * cosf(rad));
+        if (stroke > 0) canvas->fillCircle(px, py, stroke, color);
+        else canvas->drawPixel(px, py, color);
     }
     for (int a = -50; a <= 50; ++a) {
         float rad = a * 3.14159f / 180.0f;
-        canvas->drawPixel(cx + static_cast<int>(7 * sinf(rad)),
-                          by - static_cast<int>(7 * cosf(rad)), color);
+        int px = cx + static_cast<int>(s / 4 * sinf(rad));
+        int py = by - static_cast<int>(s / 4 * cosf(rad));
+        if (stroke > 0) canvas->fillCircle(px, py, stroke, color);
+        else canvas->drawPixel(px, py, color);
     }
     for (int a = -50; a <= 50; ++a) {
         float rad = a * 3.14159f / 180.0f;
-        canvas->drawPixel(cx + static_cast<int>(3 * sinf(rad)),
-                          by - static_cast<int>(3 * cosf(rad)), color);
+        int px = cx + static_cast<int>(s * 3 / 28 * sinf(rad));
+        int py = by - static_cast<int>(s * 3 / 28 * cosf(rad));
+        if (stroke > 0) canvas->fillCircle(px, py, stroke, color);
+        else canvas->drawPixel(px, py, color);
     }
-    canvas->fillCircle(cx, by, 1, color);
+    canvas->fillCircle(cx, by, std::max(1, s / 28), color);
     if (!wifiConnected) {
-        canvas->drawLine(x + 4, y + 24, x + 24, y + 4, TFT_RED);
-        canvas->drawLine(x + 5, y + 24, x + 25, y + 4, TFT_RED);
+        canvas->drawLine(x + s / 7, y + s * 6 / 7, x + s * 6 / 7, y + s / 7, TFT_RED);
+        canvas->drawLine(x + s / 7 + 1, y + s * 6 / 7, x + s * 6 / 7 + 1, y + s / 7, TFT_RED);
     }
 }
 
-void StatusOverlay::drawBatteryIcon(LGFX_Sprite* canvas, int8_t level, bool charging) {
-    const int x = 288;
-    const int y = 4;
-    canvas->fillRoundRect(x, y, 28, 28, 6, 0x2104);
+void StatusOverlay::drawBatteryIcon(LGFX_Sprite* canvas, int8_t level, bool charging) const {
+    UiRect bounds = layout_.batteryBounds;
+    const int s = layout_.iconSize;
+    const int x = bounds.x + (bounds.w - s) / 2;
+    const int y = bounds.y + (bounds.h - s) / 2;
+    canvas->fillRoundRect(x, y, s, s, std::max(1, s * 3 / 14), 0x2104);
 
     const uint16_t outline = 0xC618;
-    canvas->drawRoundRect(x + 3, y + 8, 18, 12, 2, outline);
-    canvas->fillRect(x + 21, y + 11, 3, 6, outline);
+    canvas->drawRoundRect(x + s * 3 / 28, y + s * 2 / 7, s * 9 / 14, s * 3 / 7,
+                          std::max(1, s / 14), outline);
+    canvas->fillRect(x + s * 3 / 4, y + s * 11 / 28, std::max(1, s * 3 / 28),
+                     s * 3 / 14, outline);
 
     if (level < 0) {
         canvas->setTextColor(outline);
         canvas->setTextSize(1);
-        canvas->drawChar('?', x + 9, y + 10);
+        canvas->drawChar('?', x + s / 3, y + s * 5 / 14);
         return;
     }
 
@@ -135,28 +202,31 @@ void StatusOverlay::drawBatteryIcon(LGFX_Sprite* canvas, int8_t level, bool char
     else if (level >= 20) fillColor = TFT_YELLOW;
     else fillColor = TFT_RED;
 
-    int fillW = static_cast<int>(level) * 14 / 100;
+    int fillW = static_cast<int>(level) * (s / 2) / 100;
     if (fillW < 1 && level > 0) fillW = 1;
-    if (fillW > 0) canvas->fillRect(x + 5, y + 10, fillW, 8, fillColor);
+    if (fillW > 0) canvas->fillRect(x + s * 5 / 28, y + s * 5 / 14,
+                                     fillW, s * 2 / 7, fillColor);
 
     if (charging) {
         const uint16_t boltColor = TFT_WHITE;
-        int cx = x + 12;
-        int cy = y + 14;
-        canvas->fillTriangle(cx + 3, cy - 6, cx - 3, cy, cx + 1, cy, boltColor);
-        canvas->fillTriangle(cx - 1, cy, cx + 3, cy, cx - 3, cy + 6, boltColor);
+        int cx = x + s * 3 / 7;
+        int cy = y + s / 2;
+        canvas->fillTriangle(cx + s * 3 / 28, cy - s * 3 / 14, cx - s * 3 / 28,
+                             cy, cx + s / 28, cy, boltColor);
+        canvas->fillTriangle(cx - s / 28, cy, cx + s * 3 / 28, cy,
+                             cx - s * 3 / 28, cy + s * 3 / 14, boltColor);
     }
 }
 
 void StatusOverlay::drawVolumeIndicator(LGFX_Sprite* canvas, uint8_t level,
-                                        uint8_t levelCount) {
+                                        uint8_t levelCount) const {
     if (!canvas || levelCount <= 1) return;
 
     const uint8_t n = levelCount - 1;
     const int barH = 28;
     const int gap = 5;
     const int maxW = 30;
-    const int x = 5;
+    const int x = layout_.volumeIndicatorX;
     const int totalH = n * barH + (n - 1) * gap;
     const int startY = (canvas->height() - totalH) / 2;
 

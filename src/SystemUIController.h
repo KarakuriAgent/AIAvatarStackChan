@@ -10,6 +10,8 @@ namespace aiavatar {
 
 class AIAvatar;
 
+using TapCallback = bool (*)(int16_t x, int16_t y);
+
 enum class ButtonId : uint8_t {
     A = 0,
     B,
@@ -23,6 +25,7 @@ enum class ButtonAction : uint8_t {
     Stop,
     WebSocketToggle,
     MicToggle,
+    PushToTalk,
 };
 
 class SystemUIController {
@@ -36,9 +39,14 @@ public:
     bool uiVisible() const { return uiVisible_; }
     void setVirtualButtonsEnabled(bool enabled) { virtualButtonsEnabled_ = enabled; }
     bool virtualButtonsEnabled() const { return virtualButtonsEnabled_; }
+    void setTouchPushToTalkEnabled(bool enabled) { touchPushToTalkEnabled_ = enabled; }
+    bool touchPushToTalkEnabled() const { return touchPushToTalkEnabled_; }
     void setVirtualButtonArea(ButtonId id, UiRect area);
     void setButtonAction(ButtonId id, ButtonAction action);
     void runButtonAction(ButtonId id);
+    void setSystemBarHeight(int16_t height) { systemBarHeight_ = height; }
+    void setMenuHorizontalMargin(int16_t margin) { menuHorizontalMargin_ = margin; }
+    void onUnhandledTap(TapCallback cb) { unhandledTapCb_ = cb; }
 
 private:
     static constexpr uint8_t kButtonCount = static_cast<uint8_t>(ButtonId::Count);
@@ -47,6 +55,7 @@ private:
     const Config* config_;
     StatusOverlay* statusOverlay_;
     bool virtualButtonsEnabled_;
+    bool touchPushToTalkEnabled_;
     UiRect virtualButtonAreas_[kButtonCount];
     ButtonAction buttonActions_[kButtonCount];
     bool uiVisible_;
@@ -61,6 +70,9 @@ private:
     int16_t touchStartY_;
     int16_t touchLastX_;
     int16_t touchLastY_;
+    int16_t systemBarHeight_;
+    int16_t menuHorizontalMargin_;
+    TapCallback unhandledTapCb_;
 
     static constexpr uint32_t kMenuAutoCloseMs = 10000;
     static constexpr uint32_t kMenuSelectCloseDelayMs = 600;
@@ -77,6 +89,8 @@ private:
     void handleTap(int16_t x, int16_t y);
     bool handleVirtualButtonTap(int16_t x, int16_t y);
     void updateHold(const m5::touch_detail_t& detail);
+    bool hasPushToTalkButton() const;
+    bool isPushToTalkTouch(int16_t x, int16_t y) const;
     void openMenu();
     void closeMenu();
     void handleMenuTap(int16_t x, int16_t y);
@@ -85,7 +99,7 @@ private:
     UiRect menuBounds() const;
     int8_t menuIndexAt(int16_t x, int16_t y) const;
     bool consumeTap(const m5::touch_detail_t& detail, int16_t& x, int16_t& y);
-    bool isSystemBarTouch(int16_t y) const { return y <= 36; }
+    bool isSystemBarTouch(int16_t y) const { return y <= systemBarHeight_; }
 };
 
 }  // namespace aiavatar

@@ -29,7 +29,7 @@ static const char* kMouthPaths[] = {
 
 FaceController::FaceController()
     : display_(nullptr),
-      blinkSprite_(nullptr),
+      blinkSprite_{nullptr, 0, 0, ScreenRenderer::kTransparentColor},
       currentExpression_(Expression::Neutral),
       currentMouth_(MouthShape::None),
       blinking_(false),
@@ -38,7 +38,9 @@ FaceController::FaceController()
       blinkEndMs_(0),
       started_(false) {
     for (auto& sprite : faceSprites_) sprite = nullptr;
-    for (auto& sprite : mouthSprites_) sprite = nullptr;
+    for (auto& sprite : mouthSprites_) {
+        sprite = {nullptr, 0, 0, ScreenRenderer::kTransparentColor};
+    }
 }
 
 bool FaceController::begin(ScreenRenderer& display) {
@@ -83,18 +85,20 @@ void FaceController::loadSprites() {
 
     for (uint8_t i = 0; i < static_cast<uint8_t>(MouthShape::Count); ++i) {
         if (!kMouthPaths[i]) {
-            mouthSprites_[i] = nullptr;
+            mouthSprites_[i] = {nullptr, 0, 0, ScreenRenderer::kTransparentColor};
             continue;
         }
         mouthSprites_[i] =
-            display_->loadSprite(kMouthPaths[i], w, h, ScreenRenderer::kTransparentColor);
-        if (!mouthSprites_[i]) {
+            display_->loadLayerSprite(kMouthPaths[i], w, h, ScreenRenderer::kTransparentColor);
+        if (!mouthSprites_[i].valid()) {
             Serial.printf("[Face] missing %s; lipsync shape disabled\n", kMouthPaths[i]);
         }
     }
 
-    blinkSprite_ = display_->loadSprite("/avatar/neutral_blink.png", w, h);
-    if (!blinkSprite_) Serial.println("[Face] blink image missing; blink disabled");
+    blinkSprite_ =
+        display_->loadLayerSprite("/avatar/neutral_blink.png", w, h,
+                                  ScreenRenderer::kTransparentColor);
+    if (!blinkSprite_.valid()) Serial.println("[Face] blink image missing; blink disabled");
 }
 
 void FaceController::update(bool speakerPlaying, float audioRms) {
@@ -111,7 +115,7 @@ void FaceController::update(bool speakerPlaying, float audioRms) {
         changed = true;
     }
 
-    if (currentExpression_ == Expression::Neutral && blinkSprite_) {
+    if (currentExpression_ == Expression::Neutral && blinkSprite_.valid()) {
         if (blinkEndMs_ > 0 && static_cast<int32_t>(now - blinkEndMs_) >= 0) {
             blinkEndMs_ = 0;
             blinking_ = false;
@@ -182,20 +186,21 @@ void FaceController::scheduleBlink(uint32_t now) {
 
 void FaceController::applyToDisplay() {
     if (!display_) return;
-    LGFX_Sprite* base = nullptr;
-    if (blinking_ && currentExpression_ == Expression::Neutral && blinkSprite_) {
-        base = blinkSprite_;
-    } else {
-        base = faceSprites_[static_cast<uint8_t>(currentExpression_)];
-    }
+    LGFX_Sprite* base = faceSprites_[static_cast<uint8_t>(currentExpression_)];
 
-    LGFX_Sprite* mouth = nullptr;
+    SpriteLayer mouth{nullptr, 0, 0, ScreenRenderer::kTransparentColor};
     if (currentMouth_ != MouthShape::None) {
         mouth = mouthSprites_[static_cast<uint8_t>(currentMouth_)];
     }
 
+    SpriteLayer blink{nullptr, 0, 0, ScreenRenderer::kTransparentColor};
+    if (blinking_ && currentExpression_ == Expression::Neutral) {
+        blink = blinkSprite_;
+    }
+
     display_->setBase(base);
     display_->setOverlay(mouth);
+    display_->setOverlay2(blink);
 }
 
 }  // namespace aiavatar

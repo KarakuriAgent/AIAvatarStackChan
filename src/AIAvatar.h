@@ -9,6 +9,7 @@
 #include "LedController.h"
 #include "MotionController.h"
 #include "OpenClawEffects.h"
+#include "ResourceProvider.h"
 #include "StackChanHardware.h"
 #include "StatusOverlay.h"
 #include "SystemUIController.h"
@@ -29,6 +30,7 @@ public:
     AIAvatar();
 
     bool begin(const Config& config);
+    bool begin(const Config& config, const ResourceProvider& resources);
     bool useStackChan();
     void update();
     void setVolume(uint8_t volume);
@@ -42,6 +44,7 @@ public:
     void connectWebSocket();
     void disconnectWebSocket();
     void switchWiFi(uint8_t networkIndex);
+    bool invokeText(const char* text);
 
     WebSocketClient& websocket() { return ws_; }
     MicrophoneInput& microphone() { return mic_; }
@@ -94,6 +97,7 @@ private:
     SystemUIController systemUI_;
     VisualEffects visualEffects_;
     OpenClawEffects openClaw_;
+    ResourceProvider defaultResources_;
 
     volatile bool micMuted_;
     volatile bool serverProcessing_;
@@ -158,6 +162,7 @@ private:
     void showVisionPreview(const uint8_t* jpgBuf, size_t jpgLen);
     void updateVisionPreview();
     void drawVisionPreview(LGFX_Sprite* canvas);
+    void logMemoryUsage(const char* label) const;
     uint8_t nearestVolumeLevel(uint8_t volume) const;
     bool hasSpeech(const int16_t* samples, size_t sampleCount) const;
     static bool readMicFrameStatic(int16_t* dest, void* context);

@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+class Stream;
+
 namespace aiavatar {
 
 static constexpr size_t kMicBufferSamplesMax = 2048;
@@ -75,6 +77,8 @@ struct Config {
     bool debugLog;
 
     Config();
+    bool loadFromJson(Stream& stream);
+    bool loadFromJsonBytes(const uint8_t* data, size_t len);
     bool loadFromSD(const char* path = "/config.json");
 };
 

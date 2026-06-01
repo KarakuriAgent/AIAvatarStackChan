@@ -40,6 +40,8 @@ public:
     void stopHardware();
     void requestImmediateStop();
     void setVolume(uint8_t volume);
+    void setPcmGain(float gain) { pcmGain_ = gain > 0.0f ? gain : 1.0f; }
+    float pcmGain() const { return pcmGain_; }
 
     bool enqueueFormat(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample);
     bool enqueuePcmFrame(const int16_t* samples, size_t sampleCount);
@@ -80,6 +82,7 @@ private:
     bool playing_;
     volatile bool immediateStopRequested_;
     volatile uint8_t volume_;
+    float pcmGain_;
     uint32_t sampleRate_;
     uint8_t channels_;
     uint8_t bitsPerSample_;

@@ -23,6 +23,7 @@ SpeakerOutput::SpeakerOutput()
       playing_(false),
       immediateStopRequested_(false),
       volume_(200),
+      pcmGain_(1.0f),
       sampleRate_(16000),
       channels_(1),
       bitsPerSample_(16),
@@ -285,7 +286,20 @@ bool SpeakerOutput::hasStartThreshold() const {
 
 bool SpeakerOutput::playFrame(const int16_t* samples, size_t sampleCount) {
     if (!hardwareStarted_ || !samples || sampleCount == 0 || M5.Speaker.isPlaying()) return false;
-    M5.Speaker.playRaw(samples, sampleCount, sampleRate_, false, 1);
+    int16_t amplified[kPlaybackChunkSamples];
+    const int16_t* playSamples = samples;
+    if (pcmGain_ != 1.0f) {
+        size_t n = sampleCount > kPlaybackChunkSamples ? kPlaybackChunkSamples : sampleCount;
+        for (size_t i = 0; i < n; ++i) {
+            float v = samples[i] * pcmGain_;
+            if (v > 32767.0f) v = 32767.0f;
+            if (v < -32768.0f) v = -32768.0f;
+            amplified[i] = static_cast<int16_t>(v);
+        }
+        playSamples = amplified;
+        sampleCount = n;
+    }
+    M5.Speaker.playRaw(playSamples, sampleCount, sampleRate_, false, 1);
     updateRms(samples, sampleCount);
     while (M5.Speaker.isPlaying()) {
         if (immediateStopRequested_) {

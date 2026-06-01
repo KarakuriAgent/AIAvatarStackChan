@@ -1,8 +1,8 @@
 #include "Config.h"
+#include "ResourceProvider.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <SD.h>
 #include <cstring>
 
 namespace aiavatar {
@@ -80,117 +80,127 @@ Config::Config()
     }
 }
 
-bool Config::loadFromSD(const char* path) {
-    if (!SD.exists(path)) {
-        Serial.printf("[Config] %s not found, using defaults\n", path);
-        return false;
-    }
-
-    File file = SD.open(path, FILE_READ);
-    if (!file) {
-        Serial.printf("[Config] failed to open %s\n", path);
-        return false;
-    }
-
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, file);
-    file.close();
-    if (err) {
-        Serial.printf("[Config] JSON parse error: %s\n", err.c_str());
-        return false;
-    }
-
-    strlcpy(wifiSsid, doc["wifi_ssid"] | wifiSsid, sizeof(wifiSsid));
-    strlcpy(wifiPass, doc["wifi_pass"] | wifiPass, sizeof(wifiPass));
+static bool applyJsonDocument(Config& config, JsonDocument& doc) {
+    strlcpy(config.wifiSsid, doc["wifi_ssid"] | config.wifiSsid, sizeof(config.wifiSsid));
+    strlcpy(config.wifiPass, doc["wifi_pass"] | config.wifiPass, sizeof(config.wifiPass));
     if (doc["wifi_networks"].is<JsonArray>()) {
         JsonArray networks = doc["wifi_networks"].as<JsonArray>();
-        wifiNetworkCount = 0;
+        config.wifiNetworkCount = 0;
         for (JsonObject network : networks) {
-            if (wifiNetworkCount >= kMaxWifiNetworks) break;
+            if (config.wifiNetworkCount >= kMaxWifiNetworks) break;
             const char* ssid = network["ssid"] | "";
             if (!ssid[0]) continue;
-            auto& dst = wifiNetworks[wifiNetworkCount++];
+            auto& dst = config.wifiNetworks[config.wifiNetworkCount++];
             strlcpy(dst.ssid, ssid, sizeof(dst.ssid));
             strlcpy(dst.pass, network["pass"] | "", sizeof(dst.pass));
             strlcpy(dst.name, network["name"] | "", sizeof(dst.name));
         }
-        if (wifiSsid[0] == '\0' && wifiNetworkCount > 0) {
-            strlcpy(wifiSsid, wifiNetworks[0].ssid, sizeof(wifiSsid));
-            strlcpy(wifiPass, wifiNetworks[0].pass, sizeof(wifiPass));
+        if (config.wifiSsid[0] == '\0' && config.wifiNetworkCount > 0) {
+            strlcpy(config.wifiSsid, config.wifiNetworks[0].ssid, sizeof(config.wifiSsid));
+            strlcpy(config.wifiPass, config.wifiNetworks[0].pass, sizeof(config.wifiPass));
         }
     }
-    if (wifiSsid[0] != '\0' && wifiNetworkCount == 0) {
-        strlcpy(wifiNetworks[0].ssid, wifiSsid, sizeof(wifiNetworks[0].ssid));
-        strlcpy(wifiNetworks[0].pass, wifiPass, sizeof(wifiNetworks[0].pass));
-        wifiNetworks[0].name[0] = '\0';
-        wifiNetworkCount = 1;
+    if (config.wifiSsid[0] != '\0' && config.wifiNetworkCount == 0) {
+        strlcpy(config.wifiNetworks[0].ssid, config.wifiSsid, sizeof(config.wifiNetworks[0].ssid));
+        strlcpy(config.wifiNetworks[0].pass, config.wifiPass, sizeof(config.wifiNetworks[0].pass));
+        config.wifiNetworks[0].name[0] = '\0';
+        config.wifiNetworkCount = 1;
     }
-    strlcpy(wsHost, doc["ws_host"] | wsHost, sizeof(wsHost));
-    wsPort = doc["ws_port"] | wsPort;
-    strlcpy(wsPath, doc["ws_path"] | wsPath, sizeof(wsPath));
-    strlcpy(userId, doc["user_id"] | userId, sizeof(userId));
-    strlcpy(channel, doc["channel"] | channel, sizeof(channel));
-    strlcpy(timezone, doc["timezone"] | timezone, sizeof(timezone));
+    strlcpy(config.wsHost, doc["ws_host"] | config.wsHost, sizeof(config.wsHost));
+    config.wsPort = doc["ws_port"] | config.wsPort;
+    strlcpy(config.wsPath, doc["ws_path"] | config.wsPath, sizeof(config.wsPath));
+    strlcpy(config.userId, doc["user_id"] | config.userId, sizeof(config.userId));
+    strlcpy(config.channel, doc["channel"] | config.channel, sizeof(config.channel));
+    strlcpy(config.timezone, doc["timezone"] | config.timezone, sizeof(config.timezone));
 
-    micSampleRate = doc["mic_sample_rate"] | micSampleRate;
-    micMagnification = doc["mic_magnification"] | micMagnification;
-    size_t requestedMicSamples = doc["mic_buffer_samples"] | micBufferSamples;
+    config.micSampleRate = doc["mic_sample_rate"] | config.micSampleRate;
+    config.micMagnification = doc["mic_magnification"] | config.micMagnification;
+    size_t requestedMicSamples = doc["mic_buffer_samples"] | config.micBufferSamples;
     if (requestedMicSamples > 0 && requestedMicSamples <= kMicBufferSamplesMax) {
-        micBufferSamples = requestedMicSamples;
+        config.micBufferSamples = requestedMicSamples;
     }
-    vadThresholdDb = doc["vad_threshold_db"] | vadThresholdDb;
+    config.vadThresholdDb = doc["vad_threshold_db"] | config.vadThresholdDb;
 
     if (doc.containsKey("playback_queue_depth")) {
-        playbackQueueDepth = doc["playback_queue_depth"].as<size_t>();
+        config.playbackQueueDepth = doc["playback_queue_depth"].as<size_t>();
     } else if (doc.containsKey("rbuf_samples")) {
         size_t legacySamples = doc["rbuf_samples"].as<size_t>();
-        playbackQueueDepth = (legacySamples + kPlaybackChunkSamples - 1) / kPlaybackChunkSamples;
-        if (playbackQueueDepth > 2048) playbackQueueDepth = 2048;
+        config.playbackQueueDepth = (legacySamples + kPlaybackChunkSamples - 1) / kPlaybackChunkSamples;
+        if (config.playbackQueueDepth > 2048) config.playbackQueueDepth = 2048;
     }
-    playbackStartThreshold = doc["start_threshold"] | playbackStartThreshold;
-    playbackDrainTimeoutMs = doc["drain_timeout_ms"] | playbackDrainTimeoutMs;
-    speakerVolume = doc["speaker_volume"] | speakerVolume;
+    config.playbackStartThreshold = doc["start_threshold"] | config.playbackStartThreshold;
+    config.playbackDrainTimeoutMs = doc["drain_timeout_ms"] | config.playbackDrainTimeoutMs;
+    config.speakerVolume = doc["speaker_volume"] | config.speakerVolume;
     if (doc["volume_levels"].is<JsonArray>()) {
         JsonArray levels = doc["volume_levels"].as<JsonArray>();
         uint8_t count = 0;
         for (JsonVariant level : levels) {
             if (count >= kMaxVolumeLevels) break;
-            volumeLevels[count++] = level.as<uint8_t>();
+            config.volumeLevels[count++] = level.as<uint8_t>();
         }
         if (count >= 2) {
-            volumeLevelCount = count;
+            config.volumeLevelCount = count;
         }
     }
 
-    audioTaskStackSize = doc["audio_task_stack_size"] | audioTaskStackSize;
-    audioTaskCore = doc["audio_task_core"] | audioTaskCore;
-    wsTaskStackSize = doc["ws_task_stack_size"] | wsTaskStackSize;
-    wsTaskCore = doc["ws_task_core"] | wsTaskCore;
-    wsReconnectIntervalMs = doc["ws_reconnect_interval_ms"] | wsReconnectIntervalMs;
-    micTxSlowBackoffMs = doc["mic_tx_slow_backoff_ms"] | micTxSlowBackoffMs;
-    micTxFailBackoffMs = doc["mic_tx_fail_backoff_ms"] | micTxFailBackoffMs;
-    keepaliveIntervalMs = doc["keepalive_interval_ms"] | keepaliveIntervalMs;
-    displayRotation = doc["display_rotation"] | displayRotation;
-    displayBrightness = doc["display_brightness"] | displayBrightness;
-    statusOverlayEnabled = doc["status_overlay_enabled"] | statusOverlayEnabled;
-    visionPreviewDurationMs = doc["vision_preview_duration_ms"] | visionPreviewDurationMs;
-    loadRgbColor(doc, "accepted_led_color", acceptedLedColor);
-    loadRgbColor(doc, "tool_led_color", toolLedColor);
-    pttMaxSeconds = doc["ptt_max_seconds"] | pttMaxSeconds;
-    pttMinSeconds = doc["ptt_min_seconds"] | pttMinSeconds;
-    pttHoldThresholdMs = doc["ptt_hold_threshold_ms"] | pttHoldThresholdMs;
-    pitchHome = doc["pitch_home"] | pitchHome;
-    stackChanAutoAngleSync = doc["stackchan_auto_angle_sync"] | stackChanAutoAngleSync;
-    strlcpy(nadeInvokePrompt, doc["nade_invoke_prompt"] | nadeInvokePrompt,
-            sizeof(nadeInvokePrompt));
-    strlcpy(visionInvokePrompt, doc["vision_invoke_prompt"] | visionInvokePrompt,
-            sizeof(visionInvokePrompt));
-    debugLog = doc["debug_log"] | debugLog;
+    config.audioTaskStackSize = doc["audio_task_stack_size"] | config.audioTaskStackSize;
+    config.audioTaskCore = doc["audio_task_core"] | config.audioTaskCore;
+    config.wsTaskStackSize = doc["ws_task_stack_size"] | config.wsTaskStackSize;
+    config.wsTaskCore = doc["ws_task_core"] | config.wsTaskCore;
+    config.wsReconnectIntervalMs = doc["ws_reconnect_interval_ms"] | config.wsReconnectIntervalMs;
+    config.micTxSlowBackoffMs = doc["mic_tx_slow_backoff_ms"] | config.micTxSlowBackoffMs;
+    config.micTxFailBackoffMs = doc["mic_tx_fail_backoff_ms"] | config.micTxFailBackoffMs;
+    config.keepaliveIntervalMs = doc["keepalive_interval_ms"] | config.keepaliveIntervalMs;
+    config.displayRotation = doc["display_rotation"] | config.displayRotation;
+    config.displayBrightness = doc["display_brightness"] | config.displayBrightness;
+    config.statusOverlayEnabled = doc["status_overlay_enabled"] | config.statusOverlayEnabled;
+    config.visionPreviewDurationMs = doc["vision_preview_duration_ms"] | config.visionPreviewDurationMs;
+    loadRgbColor(doc, "accepted_led_color", config.acceptedLedColor);
+    loadRgbColor(doc, "tool_led_color", config.toolLedColor);
+    config.pttMaxSeconds = doc["ptt_max_seconds"] | config.pttMaxSeconds;
+    config.pttMinSeconds = doc["ptt_min_seconds"] | config.pttMinSeconds;
+    config.pttHoldThresholdMs = doc["ptt_hold_threshold_ms"] | config.pttHoldThresholdMs;
+    config.pitchHome = doc["pitch_home"] | config.pitchHome;
+    config.stackChanAutoAngleSync = doc["stackchan_auto_angle_sync"] | config.stackChanAutoAngleSync;
+    strlcpy(config.nadeInvokePrompt, doc["nade_invoke_prompt"] | config.nadeInvokePrompt,
+            sizeof(config.nadeInvokePrompt));
+    strlcpy(config.visionInvokePrompt, doc["vision_invoke_prompt"] | config.visionInvokePrompt,
+            sizeof(config.visionInvokePrompt));
+    config.debugLog = doc["debug_log"] | config.debugLog;
 
-    Serial.printf("[Config] WS: %s:%u%s user=%s\n", wsHost, wsPort, wsPath, userId);
+    Serial.printf("[Config] WS: %s:%u%s user=%s\n",
+                  config.wsHost, config.wsPort, config.wsPath, config.userId);
     Serial.printf("[Config] mic=%uHz/%u samples speakerVol=%u\n",
-                  micSampleRate, micBufferSamples, speakerVolume);
+                  config.micSampleRate, config.micBufferSamples, config.speakerVolume);
     return true;
+}
+
+bool Config::loadFromJson(Stream& stream) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, stream);
+    if (err) {
+        Serial.printf("[Config] JSON parse error: %s\n", err.c_str());
+        return false;
+    }
+    return applyJsonDocument(*this, doc);
+}
+
+bool Config::loadFromJsonBytes(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return false;
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, data, len);
+    if (err) {
+        Serial.printf("[Config] JSON parse error: %s\n", err.c_str());
+        return false;
+    }
+    return applyJsonDocument(*this, doc);
+}
+
+bool Config::loadFromSD(const char* path) {
+    ResourceProvider resources;
+    resources.useSD(true);
+    return resources.loadConfig(*this, path);
 }
 
 }  // namespace aiavatar
