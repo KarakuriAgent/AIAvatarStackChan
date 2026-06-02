@@ -15,5 +15,6 @@
 #include "StatusOverlay.h"
 #include "SystemUIController.h"
 #include "VisualEffects.h"
+#include "SleepManager.h"
 #include "AIAvatar.h"
 #include "WebSocketClient.h"

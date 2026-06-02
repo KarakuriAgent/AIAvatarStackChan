@@ -142,6 +142,10 @@ bool AIAvatar::beginFast() {
                   pttBufCapacity_, (pttBufCapacity_ * sizeof(int16_t)) / 1024);
     mic_.begin();
     ws_.setUploadPcmFormat(config_.micSampleRate, 1);
+    if (!ws_.reserveInvokeAudioBuffer(pttBufCapacity_)) {
+        Serial.println("[AIAvatar] PTT invoke audio buffer allocation failed");
+        return false;
+    }
 
     AudioFrameProvider micProvider = {
         AIAvatar::readMicFrameStatic,
@@ -216,6 +220,10 @@ bool AIAvatar::beginNormal() {
                   pttBufCapacity_, (pttBufCapacity_ * sizeof(int16_t)) / 1024);
     mic_.begin();
     ws_.setUploadPcmFormat(config_.micSampleRate, 1);
+    if (!ws_.reserveInvokeAudioBuffer(pttBufCapacity_)) {
+        Serial.println("[AIAvatar] PTT invoke audio buffer allocation failed");
+        return false;
+    }
 
     AudioFrameProvider micProvider = {
         AIAvatar::readMicFrameStatic,
@@ -720,7 +728,11 @@ void AIAvatar::handlePttSend() {
         pttBufPos_ = 0;
         heavyDeferredResumeMs_ = now + 10000;
     } else {
-        pttSendRetryMs_ = now + 1000;
+        pttSendPending_ = false;
+        pttSendRetryMs_ = 0;
+        pttBufPos_ = 0;
+        heavyDeferredResumeMs_ = now + 1000;
+        Serial.println("[AIAvatar] PTT send failed; dropped pending audio");
     }
 }
 

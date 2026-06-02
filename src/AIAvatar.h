@@ -67,6 +67,10 @@ public:
     bool isMicMuted() const { return micMuted_; }
     bool isServerProcessing() const { return serverProcessing_; }
     bool isPushToTalkActive() const { return pushToTalkActive_; }
+    bool isStartupComplete() const {
+        return !config_.fastStartup ||
+               (deferredStartupStage_ >= 7 && face_.deferredLoadingComplete());
+    }
 
     void onSpeechDetected(SpeechDetectedCallback cb) { speechDetectedCb_ = cb; }
     void onNade(NadeCallback cb) { userNadeCb_ = cb; }

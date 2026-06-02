@@ -15,10 +15,17 @@ static constexpr uint8_t kMaxWifiNetworks = 5;
 static constexpr uint8_t kMaxVolumeLevels = 8;
 static constexpr size_t kInvokePromptMaxLen = 512;
 
+enum class SleepWifiMode : uint8_t {
+    Sleep,
+    Off,
+};
+
 struct WifiNetworkConfig {
     char ssid[64];
     char pass[64];
     char name[64];
+    SleepWifiMode sleepWifiMode;
+    bool sleepWifiModeConfigured;
 };
 
 struct RgbColor {
@@ -64,6 +71,10 @@ struct Config {
 
     uint8_t displayRotation;
     uint8_t displayBrightness;
+    bool sleepEnabled;
+    uint32_t sleepTimeoutMs;
+    uint8_t sleepDisplayBrightness;
+    SleepWifiMode sleepWifiMode;
     bool statusOverlayEnabled;
     uint32_t visionPreviewDurationMs;
     RgbColor acceptedLedColor;
