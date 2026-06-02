@@ -28,7 +28,13 @@ public:
     FaceController();
 
     bool begin(ScreenRenderer& display);
+    bool beginMinimal(ScreenRenderer& display);
     void update(bool speakerPlaying, float audioRms);
+    void setDeferredLoadingEnabled(bool enabled) { deferredLoadingEnabled_ = enabled; }
+    bool loadNextDeferredSprite(bool ignoreSchedule = false);
+    bool deferredLoadingComplete() const {
+        return lazyLoadStep_ >= 2 + static_cast<uint8_t>(Expression::Count);
+    }
     void setExpression(Expression expression, uint32_t durationMs = 0);
     void setExpression(const char* faceName, float durationSec = 0.0f);
 
@@ -46,9 +52,12 @@ private:
     uint32_t expressionEndMs_;
     uint32_t nextBlinkMs_;
     uint32_t blinkEndMs_;
+    uint32_t lazyLoadNextMs_;
+    uint8_t lazyLoadStep_;
+    bool deferredLoadingEnabled_;
     bool started_;
 
-    void loadSprites();
+    void loadInitialSprites();
     void scheduleBlink(uint32_t now);
     void applyToDisplay();
 };

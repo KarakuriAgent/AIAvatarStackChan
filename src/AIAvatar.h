@@ -109,6 +109,14 @@ private:
     volatile bool visionRequestPending_;
     volatile bool wsStopPending_;
     bool stackChanHardwareEnabled_;
+    bool wifiStarted_;
+    bool speakerReady_;
+    bool websocketReady_;
+    bool openClawReady_;
+    bool deferredImagesLogged_;
+    uint8_t deferredStartupStage_;
+    uint32_t deferredStartupNextMs_;
+    uint32_t heavyDeferredResumeMs_;
     uint8_t volume_;
     uint8_t volumeLevelIndex_;
     uint32_t volumeOverlayUntilMs_;
@@ -125,6 +133,7 @@ private:
     size_t pttBufCapacity_;
     volatile size_t pttBufPos_;
     uint32_t pttStartMs_;
+    uint32_t pttSendRetryMs_;
     uint8_t* visionPreviewJpg_;
     size_t visionPreviewJpgLen_;
     uint32_t visionPreviewUntilMs_;
@@ -144,6 +153,8 @@ private:
     ScreenOverlayCallback userOverlayCb_;
 
     static AIAvatar* s_instance;
+    bool beginNormal();
+    bool beginFast();
     static void micTaskFunc(void* params);
     static void speakerTaskFunc(void* params);
     static void wsTaskFunc(void* params);
@@ -153,6 +164,12 @@ private:
     void handlePttSend();
     void handleInvokeTextSend();
     void handleVisionRequest();
+    void updateDeferredStartup();
+    void beginDeferredWiFi();
+    void beginDeferredSpeaker();
+    void beginDeferredWebSocket();
+    void beginDeferredOpenClaw();
+    bool canRunHeavyDeferredWork() const;
     bool queueInvokeText(const char* text);
     void beginWiFi();
     void updateWiFi();

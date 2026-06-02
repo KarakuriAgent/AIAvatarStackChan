@@ -23,6 +23,14 @@ AIAvatar::AIAvatar()
       visionRequestPending_(false),
       wsStopPending_(false),
       stackChanHardwareEnabled_(false),
+      wifiStarted_(false),
+      speakerReady_(false),
+      websocketReady_(false),
+      openClawReady_(false),
+      deferredImagesLogged_(false),
+      deferredStartupStage_(0),
+      deferredStartupNextMs_(0),
+      heavyDeferredResumeMs_(0),
       volume_(200),
       volumeLevelIndex_(0),
       volumeOverlayUntilMs_(0),
@@ -39,6 +47,7 @@ AIAvatar::AIAvatar()
       pttBufCapacity_(0),
       pttBufPos_(0),
       pttStartMs_(0),
+      pttSendRetryMs_(0),
       visionPreviewJpg_(nullptr),
       visionPreviewJpgLen_(0),
       visionPreviewUntilMs_(0),
@@ -75,23 +84,101 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     config_ = config;
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
     volume_ = config_.volumeLevels[volumeLevelIndex_];
+    speaker_.setAutoNormalize(config_.audioNormalizeTargetPeak,
+                              config_.audioNormalizeMaxGain);
     setenv("TZ", config_.timezone, 1);
     tzset();
-    beginWiFi();
     if (!visionPreviewMutex_) {
         visionPreviewMutex_ = xSemaphoreCreateMutex();
     }
 
+    if (config_.fastStartup) {
+        return beginFast();
+    }
+    return beginNormal();
+}
+
+bool AIAvatar::beginFast() {
+    display_.setResourceProvider(&defaultResources_);
+    if (!display_.begin(config_.displayRotation, config_.displayBrightness)) {
+        Serial.println("[AIAvatar] display init failed");
+    } else if (!face_.beginMinimal(display_)) {
+        Serial.println("[AIAvatar] face init failed");
+    }
+    face_.setDeferredLoadingEnabled(false);
+    statusOverlay_.setEnabled(config_.statusOverlayEnabled);
+    systemUI_.begin(*this, config_, statusOverlay_);
+    leds_.begin(config_);
+    stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
+    motion_.begin(config_.pitchHome);
+    motion_.onNade(AIAvatar::onNadeStatic);
+    if (stackChanHardwareEnabled_) {
+        camera_.begin();
+    }
+    display_.onOverlay(AIAvatar::drawOverlayStatic);
+    updateStatusOverlay();
+    display_.update();
+
+    mic_.configure(config_.micSampleRate, config_.micMagnification, config_.micBufferSamples);
+    if (!mic_.beginQueue(2)) {
+        Serial.println("[AIAvatar] mic queue init failed");
+        return false;
+    }
+    invokeTextQueue_ = xQueueCreate(2, sizeof(InvokeTextMessage));
+    if (!invokeTextQueue_) {
+        Serial.println("[AIAvatar] invoke text queue init failed");
+        return false;
+    }
+    pttBufCapacity_ = static_cast<size_t>(config_.micSampleRate) * config_.pttMaxSeconds;
+    if (pttBufCapacity_ > 0) {
+        pttBuf_ = static_cast<int16_t*>(ps_malloc(pttBufCapacity_ * sizeof(int16_t)));
+        if (!pttBuf_) pttBuf_ = static_cast<int16_t*>(malloc(pttBufCapacity_ * sizeof(int16_t)));
+    }
+    if (!pttBuf_) {
+        Serial.println("[AIAvatar] PTT buffer allocation failed");
+        return false;
+    }
+    Serial.printf("[AIAvatar] PTT buffer=%u samples %uKB\n",
+                  pttBufCapacity_, (pttBufCapacity_ * sizeof(int16_t)) / 1024);
+    mic_.begin();
+    ws_.setUploadPcmFormat(config_.micSampleRate, 1);
+
+    AudioFrameProvider micProvider = {
+        AIAvatar::readMicFrameStatic,
+        AIAvatar::clearMicFramesStatic,
+        this,
+    };
+    if (!ws_.configureAudioUpload(micProvider, config_.micBufferSamples, config_.micTxSlowBackoffMs,
+                                  config_.micTxFailBackoffMs, config_.keepaliveIntervalMs)) {
+        Serial.println("[AIAvatar] audio upload init failed");
+        return false;
+    }
+
+    xTaskCreatePinnedToCore(AIAvatar::micTaskFunc, "AIAvatarMic",
+                            config_.audioTaskStackSize, this, 1, &micTaskHandle_,
+                            config_.audioTaskCore);
+    deferredStartupStage_ = 0;
+    deferredStartupNextMs_ = millis() + 50;
+    logMemoryUsage("after fast begin");
+    return true;
+}
+
+bool AIAvatar::beginNormal() {
+    beginWiFi();
+    wifiStarted_ = true;
     if (!speaker_.begin(config_.playbackQueueDepth, config_.playbackStartThreshold)) {
         return false;
     }
     speaker_.setVolume(volume_);
+    speakerReady_ = true;
+
     display_.setResourceProvider(&defaultResources_);
     if (!display_.begin(config_.displayRotation, config_.displayBrightness)) {
         Serial.println("[AIAvatar] display init failed");
     } else if (!face_.begin(display_)) {
         Serial.println("[AIAvatar] face init failed");
     }
+    face_.setDeferredLoadingEnabled(false);
     statusOverlay_.setEnabled(config_.statusOverlayEnabled);
     systemUI_.begin(*this, config_, statusOverlay_);
     leds_.begin(config_);
@@ -103,6 +190,7 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     }
     openClaw_.begin(display_, leds_);
     openClaw_.preload();
+    openClawReady_ = true;
     display_.onOverlay(AIAvatar::drawOverlayStatic);
 
     mic_.configure(config_.micSampleRate, config_.micMagnification, config_.micBufferSamples);
@@ -151,6 +239,7 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     ws_.onAccepted(AIAvatar::onAcceptedStatic);
     ws_.begin(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
               config_.wsReconnectIntervalMs, config_.channel);
+    websocketReady_ = true;
 
     xTaskCreatePinnedToCore(AIAvatar::micTaskFunc, "AIAvatarMic",
                             config_.audioTaskStackSize, this, 1, &micTaskHandle_,
@@ -161,17 +250,27 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     xTaskCreatePinnedToCore(AIAvatar::wsTaskFunc, "AIAvatarWS",
                             config_.wsTaskStackSize, this, 1, &wsTaskHandle_,
                             config_.wsTaskCore);
+    deferredStartupStage_ = 7;
     logMemoryUsage("after begin");
     return true;
 }
 
 void AIAvatar::update() {
+    if (config_.fastStartup) updateDeferredStartup();
     if (!motion_.updateHardware()) {
         M5.update();
     }
     updateWiFi();
     systemUI_.update();
+    if (config_.fastStartup && deferredStartupStage_ >= 7) {
+        face_.setDeferredLoadingEnabled(canRunHeavyDeferredWork());
+    }
     face_.update(speaker_.isPlaying(), speaker_.lastChunkRms());
+    if (config_.fastStartup && deferredStartupStage_ >= 7 && !deferredImagesLogged_ &&
+        face_.deferredLoadingComplete()) {
+        deferredImagesLogged_ = true;
+        logMemoryUsage("after deferred images");
+    }
     motion_.update(playbackActive_);
     leds_.update();
     openClaw_.update();
@@ -181,6 +280,123 @@ void AIAvatar::update() {
     updateVisionPreview();
     updateStatusOverlay();
     display_.update();
+}
+
+void AIAvatar::updateDeferredStartup() {
+    uint32_t now = millis();
+    if (static_cast<int32_t>(now - deferredStartupNextMs_) < 0) return;
+
+    switch (deferredStartupStage_) {
+        case 0:
+            beginDeferredWiFi();
+            deferredStartupStage_ = 1;
+            deferredStartupNextMs_ = now + 120;
+            break;
+        case 1:
+            if (pushToTalkActive_) {
+                deferredStartupNextMs_ = now + 200;
+                break;
+            }
+            face_.loadNextDeferredSprite(true);
+            deferredStartupStage_ = 2;
+            deferredStartupNextMs_ = now + 120;
+            break;
+        case 2:
+            if (WiFi.status() != WL_CONNECTED) {
+                deferredStartupNextMs_ = now + 250;
+                break;
+            }
+            beginDeferredWebSocket();
+            deferredStartupStage_ = 3;
+            deferredStartupNextMs_ = now + 120;
+            break;
+        case 3:
+            face_.loadNextDeferredSprite(true);
+            deferredStartupStage_ = 4;
+            deferredStartupNextMs_ = now + 80;
+            break;
+        case 4:
+            face_.loadNextDeferredSprite(true);
+            deferredStartupStage_ = 5;
+            deferredStartupNextMs_ = now + 80;
+            break;
+        case 5:
+            if (pushToTalkActive_) {
+                deferredStartupNextMs_ = now + 200;
+                break;
+            }
+            beginDeferredSpeaker();
+            deferredStartupStage_ = 6;
+            deferredStartupNextMs_ = now + 120;
+            break;
+        case 6:
+            if (!ws_.isConnected()) {
+                deferredStartupNextMs_ = now + 250;
+                break;
+            }
+            if (!canRunHeavyDeferredWork()) {
+                deferredStartupNextMs_ = now + 250;
+                break;
+            }
+            beginDeferredOpenClaw();
+            face_.setDeferredLoadingEnabled(true);
+            deferredStartupStage_ = 7;
+            logMemoryUsage("after OpenClaw preload");
+            break;
+        default:
+            break;
+    }
+}
+
+bool AIAvatar::canRunHeavyDeferredWork() const {
+    uint32_t now = millis();
+    if (static_cast<int32_t>(now - heavyDeferredResumeMs_) < 0) return false;
+    return !pushToTalkActive_ && !pttSendPending_ && !serverProcessing_ && !playbackActive_;
+}
+
+void AIAvatar::beginDeferredWiFi() {
+    if (wifiStarted_) return;
+    wifiStarted_ = true;
+    beginWiFi();
+}
+
+void AIAvatar::beginDeferredSpeaker() {
+    if (speakerReady_) return;
+    if (!speaker_.begin(config_.playbackQueueDepth, config_.playbackStartThreshold)) {
+        Serial.println("[AIAvatar] speaker init failed");
+        return;
+    }
+    speaker_.setVolume(volume_);
+    speakerReady_ = true;
+    xTaskCreatePinnedToCore(AIAvatar::speakerTaskFunc, "AIAvatarSpeaker",
+                            config_.audioTaskStackSize, this, 1, &speakerTaskHandle_,
+                            config_.audioTaskCore);
+}
+
+void AIAvatar::beginDeferredWebSocket() {
+    if (websocketReady_) return;
+    ws_.onAudioChunk(AIAvatar::onAudioChunkStatic);
+    ws_.onFinal(AIAvatar::onFinalStatic);
+    ws_.onFinalText(AIAvatar::onFinalTextStatic);
+    ws_.onStop(AIAvatar::onStopStatic);
+    ws_.onProcessing(AIAvatar::onProcessingStatic);
+    ws_.onStart(AIAvatar::onStartStatic);
+    ws_.onToolCall(AIAvatar::onToolCallStatic);
+    ws_.onVision(AIAvatar::onVisionStatic);
+    ws_.onAccepted(AIAvatar::onAcceptedStatic);
+    ws_.begin(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
+              config_.wsReconnectIntervalMs, config_.channel);
+    websocketReady_ = true;
+    xTaskCreatePinnedToCore(AIAvatar::wsTaskFunc, "AIAvatarWS",
+                            config_.wsTaskStackSize, this, 1, &wsTaskHandle_,
+                            config_.wsTaskCore);
+}
+
+void AIAvatar::beginDeferredOpenClaw() {
+    if (openClawReady_) return;
+    openClaw_.begin(display_, leds_);
+    openClaw_.preload();
+    openClawReady_ = true;
 }
 
 void AIAvatar::setVolume(uint8_t volume) {
@@ -218,11 +434,15 @@ void AIAvatar::cycleVolume() {
 
 bool AIAvatar::startPushToTalk() {
     if (!micMuted_ || !pttBuf_) return false;
+    if (config_.fastStartup && pttSendPending_) {
+        Serial.println("[AIAvatar] PTT start blocked: send pending");
+        return false;
+    }
     serverProcessing_ = false;
-    speaker_.requestImmediateStop();
+    if (speakerReady_) speaker_.requestImmediateStop();
     mic_.clearQueue();
     pttBufPos_ = 0;
-    pttSendPending_ = false;
+    pttSendRetryMs_ = 0;
     pttStartMs_ = millis();
     pushToTalkActive_ = true;
     display_.setDirty();
@@ -478,12 +698,30 @@ void AIAvatar::handleInvokeTextSend() {
 
 void AIAvatar::handlePttSend() {
     if (!pttSendPending_ || !ws_.isConnected()) return;
-    pttSendPending_ = false;
+    if (config_.fastStartup && !speakerReady_) return;
+    uint32_t now = millis();
+    if (config_.fastStartup && pttSendRetryMs_ != 0 &&
+        static_cast<int32_t>(now - pttSendRetryMs_) < 0) {
+        return;
+    }
+    if (!config_.fastStartup) pttSendPending_ = false;
     size_t samples = pttBufPos_;
-    if (samples == 0) return;
+    if (samples == 0) {
+        pttSendPending_ = false;
+        return;
+    }
     Serial.printf("[AIAvatar] PTT sending samples=%u\n", samples);
     bool ok = ws_.sendInvokeWithAudio(pttBuf_, samples);
     Serial.printf("[AIAvatar] PTT send %s\n", ok ? "ok" : "failed");
+    if (!config_.fastStartup) return;
+    if (ok) {
+        pttSendPending_ = false;
+        pttSendRetryMs_ = 0;
+        pttBufPos_ = 0;
+        heavyDeferredResumeMs_ = now + 10000;
+    } else {
+        pttSendRetryMs_ = now + 1000;
+    }
 }
 
 void AIAvatar::handleVisionRequest() {
@@ -583,6 +821,7 @@ void AIAvatar::updateWiFi() {
 }
 
 void AIAvatar::interruptPlaybackForNewResponse() {
+    if (!speakerReady_) return;
     speaker_.requestImmediateStop();
     uint32_t startedAt = millis();
     while (speaker_.immediateStopRequested() && millis() - startedAt < 200) {
@@ -702,10 +941,11 @@ void AIAvatar::drawVisionPreview(LGFX_Sprite* canvas) {
 }
 
 void AIAvatar::logMemoryUsage(const char* label) const {
-    size_t heapTotal = heap_caps_get_total_size(MALLOC_CAP_8BIT);
-    size_t heapFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    size_t heapMinFree = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
-    size_t heapLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    constexpr uint32_t kInternalHeapCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    size_t internalTotal = heap_caps_get_total_size(kInternalHeapCaps);
+    size_t internalFree = heap_caps_get_free_size(kInternalHeapCaps);
+    size_t internalMinFree = heap_caps_get_minimum_free_size(kInternalHeapCaps);
+    size_t internalLargest = heap_caps_get_largest_free_block(kInternalHeapCaps);
 
     size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     size_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -718,14 +958,14 @@ void AIAvatar::logMemoryUsage(const char* label) const {
                          : 0.0f;
     };
 
-    Serial.printf("[Memory] %s heap used=%uKB/%uKB %.1f%% free=%uKB minFree=%uKB largest=%uKB\n",
+    Serial.printf("[Memory] %s internal used=%uKB/%uKB %.1f%% free=%uKB minFree=%uKB largest=%uKB\n",
                   label ? label : "",
-                  static_cast<unsigned>((heapTotal - heapFree) / 1024),
-                  static_cast<unsigned>(heapTotal / 1024),
-                  usedPct(heapTotal, heapFree),
-                  static_cast<unsigned>(heapFree / 1024),
-                  static_cast<unsigned>(heapMinFree / 1024),
-                  static_cast<unsigned>(heapLargest / 1024));
+                  static_cast<unsigned>((internalTotal - internalFree) / 1024),
+                  static_cast<unsigned>(internalTotal / 1024),
+                  usedPct(internalTotal, internalFree),
+                  static_cast<unsigned>(internalFree / 1024),
+                  static_cast<unsigned>(internalMinFree / 1024),
+                  static_cast<unsigned>(internalLargest / 1024));
     Serial.printf("[Memory] %s psram used=%uKB/%uKB %.1f%% free=%uKB minFree=%uKB largest=%uKB\n",
                   label ? label : "",
                   static_cast<unsigned>((psramTotal - psramFree) / 1024),
@@ -774,6 +1014,7 @@ void AIAvatar::clearMicFramesStatic(void* context) {
 
 void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
     if (!s_instance || !s_instance->serverProcessing_) return;
+    if (!s_instance->speakerReady_) return;
     SpeakerOutput& speaker = s_instance->speaker_;
     if (chunk.faceName) {
         uint32_t durationMs = chunk.faceDurationSec > 0.0f
@@ -791,7 +1032,9 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
 }
 
 void AIAvatar::onFinalStatic() {
-    if (s_instance) s_instance->speaker_.enqueueEnd();
+    if (!s_instance) return;
+    if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
+    if (s_instance->speakerReady_) s_instance->speaker_.enqueueEnd();
 }
 
 void AIAvatar::onFinalTextStatic(const char* responseText, const char* voiceText) {
@@ -802,11 +1045,16 @@ void AIAvatar::onFinalTextStatic(const char* responseText, const char* voiceText
 void AIAvatar::onStopStatic() {
     if (!s_instance) return;
     s_instance->serverProcessing_ = false;
-    s_instance->speaker_.enqueueStop();
+    if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
+    if (s_instance->speakerReady_) s_instance->speaker_.enqueueStop();
 }
 
 void AIAvatar::onProcessingStatic(bool processing) {
-    if (s_instance) s_instance->serverProcessing_ = processing;
+    if (!s_instance) return;
+    s_instance->serverProcessing_ = processing;
+    if (s_instance->config_.fastStartup && !processing) {
+        s_instance->heavyDeferredResumeMs_ = millis() + 500;
+    }
 }
 
 void AIAvatar::onStartStatic(const char* text) {

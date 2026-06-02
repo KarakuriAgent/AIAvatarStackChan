@@ -53,6 +53,7 @@ Config::Config()
       pttHoldThresholdMs(200),
       pitchHome(200),
       stackChanAutoAngleSync(true),
+      fastStartup(false),
       debugLog(false) {
     wifiSsid[0] = '\0';
     wifiPass[0] = '\0';
@@ -175,6 +176,7 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
             sizeof(config.nadeInvokePrompt));
     strlcpy(config.visionInvokePrompt, doc["vision_invoke_prompt"] | config.visionInvokePrompt,
             sizeof(config.visionInvokePrompt));
+    config.fastStartup = doc["fast_startup"] | config.fastStartup;
     config.debugLog = doc["debug_log"] | config.debugLog;
 
     Serial.printf("[Config] WS: %s:%u%s user=%s\n",

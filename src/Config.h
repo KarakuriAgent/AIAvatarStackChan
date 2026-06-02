@@ -76,6 +76,7 @@ struct Config {
     char nadeInvokePrompt[kInvokePromptMaxLen];
     char visionInvokePrompt[kInvokePromptMaxLen];
 
+    bool fastStartup;
     bool debugLog;
 
     Config();

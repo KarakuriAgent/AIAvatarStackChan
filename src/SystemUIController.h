@@ -46,6 +46,12 @@ public:
     void runButtonAction(ButtonId id);
     void setSystemBarHeight(int16_t height) { systemBarHeight_ = height; }
     void setMenuHorizontalMargin(int16_t margin) { menuHorizontalMargin_ = margin; }
+    void setMenuItemHeight(int16_t height) { menuItemHeight_ = height; }
+    void setMenuTextSize(uint8_t size) { menuTextSize_ = size; }
+    void setMenuPadding(int16_t x, int16_t y) {
+        menuPaddingX_ = x;
+        menuPaddingY_ = y;
+    }
     void onUnhandledTap(TapCallback cb) { unhandledTapCb_ = cb; }
 
 private:
@@ -72,6 +78,10 @@ private:
     int16_t touchLastY_;
     int16_t systemBarHeight_;
     int16_t menuHorizontalMargin_;
+    int16_t menuItemHeight_;
+    uint8_t menuTextSize_;
+    int16_t menuPaddingX_;
+    int16_t menuPaddingY_;
     TapCallback unhandledTapCb_;
 
     static constexpr uint32_t kMenuAutoCloseMs = 10000;
