@@ -31,6 +31,8 @@ Config::Config()
       playbackStartThreshold(kPlaybackChunkSamples * 2),
       playbackDrainTimeoutMs(500),
       speakerVolume(80),
+      audioNormalizeTargetPeak(0.0f),
+      audioNormalizeMaxGain(8.0f),
       volumeLevelCount(5),
       audioTaskStackSize(8192),
       audioTaskCore(0),
@@ -131,6 +133,13 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
     config.playbackStartThreshold = doc["start_threshold"] | config.playbackStartThreshold;
     config.playbackDrainTimeoutMs = doc["drain_timeout_ms"] | config.playbackDrainTimeoutMs;
     config.speakerVolume = doc["speaker_volume"] | config.speakerVolume;
+    config.audioNormalizeTargetPeak =
+        doc["audio_normalize_target_peak"] | config.audioNormalizeTargetPeak;
+    config.audioNormalizeMaxGain =
+        doc["audio_normalize_max_gain"] | config.audioNormalizeMaxGain;
+    if (config.audioNormalizeTargetPeak < 0.0f) config.audioNormalizeTargetPeak = 0.0f;
+    if (config.audioNormalizeTargetPeak > 1.0f) config.audioNormalizeTargetPeak = 1.0f;
+    if (config.audioNormalizeMaxGain < 1.0f) config.audioNormalizeMaxGain = 1.0f;
     if (doc["volume_levels"].is<JsonArray>()) {
         JsonArray levels = doc["volume_levels"].as<JsonArray>();
         uint8_t count = 0;
@@ -170,8 +179,9 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
 
     Serial.printf("[Config] WS: %s:%u%s user=%s\n",
                   config.wsHost, config.wsPort, config.wsPath, config.userId);
-    Serial.printf("[Config] mic=%uHz/%u samples speakerVol=%u\n",
-                  config.micSampleRate, config.micBufferSamples, config.speakerVolume);
+    Serial.printf("[Config] mic=%uHz/%u samples speakerVol=%u normalizePeak=%.2f maxGain=%.1f\n",
+                  config.micSampleRate, config.micBufferSamples, config.speakerVolume,
+                  config.audioNormalizeTargetPeak, config.audioNormalizeMaxGain);
     return true;
 }
 

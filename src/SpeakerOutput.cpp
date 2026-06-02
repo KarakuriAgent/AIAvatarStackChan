@@ -24,13 +24,21 @@ SpeakerOutput::SpeakerOutput()
       immediateStopRequested_(false),
       volume_(200),
       pcmGain_(1.0f),
+      normalizeTargetPeak_(0.0f),
+      normalizeMaxGain_(8.0f),
+      lastPlaybackGain_(1.0f),
+      codecDacVolume_(0),
       sampleRate_(16000),
       channels_(1),
       bitsPerSample_(16),
       pendingSampleRate_(16000),
       pendingChannels_(1),
       pendingBitsPerSample_(16),
-      lastChunkRms_(0.0f) {}
+      lastChunkRms_(0.0f),
+      lastChunkPeak_(0.0f),
+      lastChunkClippedSamples_(0),
+      playbackFrameCount_(0),
+      lastAudioStatsLogMs_(0) {}
 
 bool SpeakerOutput::begin(size_t queueDepth, size_t startThreshold) {
     queueDepth_ = queueDepth > 0 ? queueDepth : 64;
@@ -104,8 +112,15 @@ bool SpeakerOutput::begin(size_t queueDepth, size_t startThreshold) {
 void SpeakerOutput::startHardware() {
     if (hardwareStarted_) return;
     M5.Speaker.begin();
+    setStopWatchPaPin(false);
     hardwareStarted_ = true;
     M5.Speaker.setVolume(volume_);
+    auto spkcfg = M5.Speaker.config();
+    Serial.printf("[Speaker] M5 speaker cfg mck=%d bck=%d ws=%d dout=%d port=%d stereo=%d mag=%u rate=%u vol=%u\n",
+                  spkcfg.pin_mck, spkcfg.pin_bck, spkcfg.pin_ws, spkcfg.pin_data_out,
+                  static_cast<int>(spkcfg.i2s_port), spkcfg.stereo, spkcfg.magnification,
+                  spkcfg.sample_rate, M5.Speaker.getVolume());
+    applyCodecDacVolume();
     playing_ = true;
 }
 
@@ -113,6 +128,7 @@ void SpeakerOutput::stopHardware() {
     if (!hardwareStarted_) return;
     while (M5.Speaker.isPlaying()) delay(1);
     M5.Speaker.end();
+    setStopWatchPaPin(false);
     hardwareStarted_ = false;
     playing_ = false;
 }
@@ -128,6 +144,39 @@ void SpeakerOutput::requestImmediateStop() {
 void SpeakerOutput::setVolume(uint8_t volume) {
     volume_ = volume;
     if (hardwareStarted_) M5.Speaker.setVolume(volume_);
+}
+
+void SpeakerOutput::setAutoNormalize(float targetPeak, float maxGain) {
+    if (targetPeak < 0.0f) targetPeak = 0.0f;
+    if (targetPeak > 1.0f) targetPeak = 1.0f;
+    if (maxGain < 1.0f) maxGain = 1.0f;
+    normalizeTargetPeak_ = targetPeak;
+    normalizeMaxGain_ = maxGain;
+    Serial.printf("[Speaker] auto normalize targetPeak=%.2f maxGain=%.1f\n",
+                  normalizeTargetPeak_, normalizeMaxGain_);
+}
+
+void SpeakerOutput::applyCodecDacVolume() {
+    if (codecDacVolume_ == 0) return;
+
+    static constexpr uint8_t kEs8311Address = 0x18;
+    static constexpr uint8_t kEs8311DacVolumeRegister = 0x32;
+    bool ok = M5.In_I2C.writeRegister8(kEs8311Address, kEs8311DacVolumeRegister,
+                                       codecDacVolume_, 100000);
+    Serial.printf("[Speaker] ES8311 DAC volume reg 0x32=0x%02X %s\n",
+                  codecDacVolume_, ok ? "ok" : "failed");
+}
+
+void SpeakerOutput::setStopWatchPaPin(bool enabled) {
+#if defined(ESP32S3)
+    if (M5.getBoard() != m5::board_t::board_M5StopWatch) return;
+
+    static constexpr uint8_t kStopWatchSpeakerPaPin = 14;
+    pinMode(kStopWatchSpeakerPaPin, OUTPUT);
+    digitalWrite(kStopWatchSpeakerPaPin, LOW);
+    Serial.printf("[Speaker] StopWatch GPIO14 PA bypass requested=%s actual=off\n",
+                  enabled ? "on" : "off");
+#endif
 }
 
 bool SpeakerOutput::enqueueFormat(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample) {
@@ -277,6 +326,11 @@ void SpeakerOutput::clearQueue() {
     pendingFormat_ = false;
     endReceived_ = false;
     lastChunkRms_ = 0.0f;
+    lastChunkPeak_ = 0.0f;
+    lastChunkClippedSamples_ = 0;
+    playbackFrameCount_ = 0;
+    lastAudioStatsLogMs_ = 0;
+    lastPlaybackGain_ = 1.0f;
     unlockState();
 }
 
@@ -288,10 +342,14 @@ bool SpeakerOutput::playFrame(const int16_t* samples, size_t sampleCount) {
     if (!hardwareStarted_ || !samples || sampleCount == 0 || M5.Speaker.isPlaying()) return false;
     int16_t amplified[kPlaybackChunkSamples];
     const int16_t* playSamples = samples;
-    if (pcmGain_ != 1.0f) {
+    updateRms(samples, sampleCount);
+
+    float playbackGain = computePlaybackGain();
+    lastPlaybackGain_ = playbackGain;
+    if (playbackGain != 1.0f) {
         size_t n = sampleCount > kPlaybackChunkSamples ? kPlaybackChunkSamples : sampleCount;
         for (size_t i = 0; i < n; ++i) {
-            float v = samples[i] * pcmGain_;
+            float v = samples[i] * playbackGain;
             if (v > 32767.0f) v = 32767.0f;
             if (v < -32768.0f) v = -32768.0f;
             amplified[i] = static_cast<int16_t>(v);
@@ -299,8 +357,8 @@ bool SpeakerOutput::playFrame(const int16_t* samples, size_t sampleCount) {
         playSamples = amplified;
         sampleCount = n;
     }
+    logAudioStats(sampleCount);
     M5.Speaker.playRaw(playSamples, sampleCount, sampleRate_, false, 1);
-    updateRms(samples, sampleCount);
     while (M5.Speaker.isPlaying()) {
         if (immediateStopRequested_) {
             M5.Speaker.stop();
@@ -318,6 +376,9 @@ void SpeakerOutput::applyFormat(uint32_t sampleRate, uint8_t channels, uint8_t b
     sampleRate_ = sampleRate > 0 ? sampleRate : 16000;
     channels_ = channels > 0 ? channels : 1;
     bitsPerSample_ = bitsPerSample > 0 ? bitsPerSample : 16;
+    playbackFrameCount_ = 0;
+    lastAudioStatsLogMs_ = 0;
+    lastPlaybackGain_ = 1.0f;
     gotFormat_ = true;
     pendingFormat_ = false;
     Serial.printf("[Speaker] format=%uHz %ubit %uch\n", sampleRate_, bitsPerSample_, channels_);
@@ -423,14 +484,58 @@ bool SpeakerOutput::enqueueEventLocked(const PlaybackEvent& event) {
 void SpeakerOutput::updateRms(const int16_t* samples, size_t sampleCount) {
     if (!samples || sampleCount == 0) {
         lastChunkRms_ = 0.0f;
+        lastChunkPeak_ = 0.0f;
+        lastChunkClippedSamples_ = 0;
         return;
     }
     float sum = 0.0f;
+    int32_t peak = 0;
+    size_t clipped = 0;
     for (size_t i = 0; i < sampleCount; ++i) {
+        int32_t sample = samples[i];
+        int32_t absSample = sample < 0 ? -sample : sample;
+        if (absSample > peak) peak = absSample;
+        if (absSample >= 32760) ++clipped;
         float normalized = samples[i] / 32768.0f;
         sum += normalized * normalized;
     }
     lastChunkRms_ = sqrtf(sum / sampleCount);
+    lastChunkPeak_ = peak / 32768.0f;
+    lastChunkClippedSamples_ = clipped;
+}
+
+float SpeakerOutput::computePlaybackGain() const {
+    float gain = pcmGain_;
+    if (normalizeTargetPeak_ > 0.0f && lastChunkPeak_ > 0.0f) {
+        float normalizeGain = normalizeTargetPeak_ / lastChunkPeak_;
+        if (normalizeGain > normalizeMaxGain_) normalizeGain = normalizeMaxGain_;
+        if (normalizeGain < 1.0f) normalizeGain = 1.0f;
+        gain *= normalizeGain;
+    }
+    return gain;
+}
+
+void SpeakerOutput::logAudioStats(size_t sampleCount) {
+    ++playbackFrameCount_;
+
+    uint32_t now = millis();
+    bool shouldLog = playbackFrameCount_ <= 4 ||
+                     lastAudioStatsLogMs_ == 0 ||
+                     now - lastAudioStatsLogMs_ >= 1000;
+    if (!shouldLog) return;
+    lastAudioStatsLogMs_ = now;
+
+    float rmsDb = lastChunkRms_ > 0.0f ? 20.0f * log10f(lastChunkRms_) : -120.0f;
+    float peakDb = lastChunkPeak_ > 0.0f ? 20.0f * log10f(lastChunkPeak_) : -120.0f;
+    float outPeak = lastChunkPeak_ * lastPlaybackGain_;
+    if (outPeak > 1.0f) outPeak = 1.0f;
+    float outPeakDb = outPeak > 0.0f ? 20.0f * log10f(outPeak) : -120.0f;
+    float gainDb = lastPlaybackGain_ > 0.0f ? 20.0f * log10f(lastPlaybackGain_) : 0.0f;
+    Serial.printf("[Speaker] pcm stats frame=%u samples=%u rate=%u peak=%.3f/%+.1fdBFS rms=%.3f/%+.1fdBFS clipped=%u gain=%.2f/%+.1fdB outPeak=%.3f/%+.1fdBFS\n",
+                  playbackFrameCount_, sampleCount, sampleRate_,
+                  lastChunkPeak_, peakDb, lastChunkRms_, rmsDb,
+                  lastChunkClippedSamples_, lastPlaybackGain_, gainDb,
+                  outPeak, outPeakDb);
 }
 
 }  // namespace aiavatar

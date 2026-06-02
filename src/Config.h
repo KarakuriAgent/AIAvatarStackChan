@@ -48,6 +48,8 @@ struct Config {
     size_t playbackStartThreshold;
     uint32_t playbackDrainTimeoutMs;
     uint8_t speakerVolume;
+    float audioNormalizeTargetPeak;
+    float audioNormalizeMaxGain;
     uint8_t volumeLevels[kMaxVolumeLevels];
     uint8_t volumeLevelCount;
 
