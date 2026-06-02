@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <cstring>
+#include <strings.h>
 
 namespace aiavatar {
 
@@ -16,6 +17,18 @@ void loadRgbColor(JsonDocument& doc, const char* key, RgbColor& color) {
     color.r = arr[0].as<uint8_t>();
     color.g = arr[1].as<uint8_t>();
     color.b = arr[2].as<uint8_t>();
+}
+
+SleepWifiMode parseSleepWifiMode(const char* value, SleepWifiMode fallback) {
+    if (!value || !value[0]) return fallback;
+    if (strcasecmp(value, "off") == 0 || strcasecmp(value, "disconnect") == 0) {
+        return SleepWifiMode::Off;
+    }
+    if (strcasecmp(value, "sleep") == 0 || strcasecmp(value, "modem_sleep") == 0 ||
+        strcasecmp(value, "keep") == 0) {
+        return SleepWifiMode::Sleep;
+    }
+    return fallback;
 }
 
 }  // namespace
@@ -44,6 +57,10 @@ Config::Config()
       keepaliveIntervalMs(1000),
       displayRotation(1),
       displayBrightness(128),
+      sleepEnabled(false),
+      sleepTimeoutMs(10UL * 60UL * 1000UL),
+      sleepDisplayBrightness(0),
+      sleepWifiMode(SleepWifiMode::Sleep),
       statusOverlayEnabled(true),
       visionPreviewDurationMs(2000),
       acceptedLedColor{0, 168, 0},
@@ -80,6 +97,8 @@ Config::Config()
         network.ssid[0] = '\0';
         network.pass[0] = '\0';
         network.name[0] = '\0';
+        network.sleepWifiMode = SleepWifiMode::Sleep;
+        network.sleepWifiModeConfigured = false;
     }
 }
 
@@ -97,6 +116,9 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
             strlcpy(dst.ssid, ssid, sizeof(dst.ssid));
             strlcpy(dst.pass, network["pass"] | "", sizeof(dst.pass));
             strlcpy(dst.name, network["name"] | "", sizeof(dst.name));
+            const char* sleepWifiMode = network["sleep_wifi_mode"] | "";
+            dst.sleepWifiModeConfigured = sleepWifiMode[0] != '\0';
+            dst.sleepWifiMode = parseSleepWifiMode(sleepWifiMode, config.sleepWifiMode);
         }
         if (config.wifiSsid[0] == '\0' && config.wifiNetworkCount > 0) {
             strlcpy(config.wifiSsid, config.wifiNetworks[0].ssid, sizeof(config.wifiSsid));
@@ -107,6 +129,8 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
         strlcpy(config.wifiNetworks[0].ssid, config.wifiSsid, sizeof(config.wifiNetworks[0].ssid));
         strlcpy(config.wifiNetworks[0].pass, config.wifiPass, sizeof(config.wifiNetworks[0].pass));
         config.wifiNetworks[0].name[0] = '\0';
+        config.wifiNetworks[0].sleepWifiMode = config.sleepWifiMode;
+        config.wifiNetworks[0].sleepWifiModeConfigured = false;
         config.wifiNetworkCount = 1;
     }
     strlcpy(config.wsHost, doc["ws_host"] | config.wsHost, sizeof(config.wsHost));
@@ -163,6 +187,12 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
     config.keepaliveIntervalMs = doc["keepalive_interval_ms"] | config.keepaliveIntervalMs;
     config.displayRotation = doc["display_rotation"] | config.displayRotation;
     config.displayBrightness = doc["display_brightness"] | config.displayBrightness;
+    config.sleepEnabled = doc["sleep_enabled"] | config.sleepEnabled;
+    config.sleepTimeoutMs = doc["sleep_timeout_ms"] | config.sleepTimeoutMs;
+    config.sleepDisplayBrightness =
+        doc["sleep_display_brightness"] | config.sleepDisplayBrightness;
+    config.sleepWifiMode =
+        parseSleepWifiMode(doc["sleep_wifi_mode"] | "", config.sleepWifiMode);
     config.statusOverlayEnabled = doc["status_overlay_enabled"] | config.statusOverlayEnabled;
     config.visionPreviewDurationMs = doc["vision_preview_duration_ms"] | config.visionPreviewDurationMs;
     loadRgbColor(doc, "accepted_led_color", config.acceptedLedColor);
