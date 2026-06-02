@@ -36,6 +36,9 @@ FaceController::FaceController()
       expressionEndMs_(0),
       nextBlinkMs_(0),
       blinkEndMs_(0),
+      lazyLoadNextMs_(0),
+      lazyLoadStep_(0),
+      deferredLoadingEnabled_(true),
       started_(false) {
     for (auto& sprite : faceSprites_) sprite = nullptr;
     for (auto& sprite : mouthSprites_) {
@@ -45,14 +48,26 @@ FaceController::FaceController()
 
 bool FaceController::begin(ScreenRenderer& display) {
     display_ = &display;
-    loadSprites();
+    loadInitialSprites();
+    scheduleBlink(millis());
+    started_ = faceSprites_[static_cast<uint8_t>(Expression::Neutral)] != nullptr;
+    while (started_ && lazyLoadStep_ < 2 + static_cast<uint8_t>(Expression::Count)) {
+        loadNextDeferredSprite(true);
+    }
+    applyToDisplay();
+    return started_;
+}
+
+bool FaceController::beginMinimal(ScreenRenderer& display) {
+    display_ = &display;
+    loadInitialSprites();
     scheduleBlink(millis());
     started_ = faceSprites_[static_cast<uint8_t>(Expression::Neutral)] != nullptr;
     applyToDisplay();
     return started_;
 }
 
-void FaceController::loadSprites() {
+void FaceController::loadInitialSprites() {
     if (!display_) return;
     int w = display_->width();
     int h = display_->height();
@@ -74,35 +89,59 @@ void FaceController::loadSprites() {
         }
     }
 
-    LGFX_Sprite* neutral = faceSprites_[static_cast<uint8_t>(Expression::Neutral)];
-    for (uint8_t i = 1; i < static_cast<uint8_t>(Expression::Count); ++i) {
-        faceSprites_[i] = display_->loadSprite(kFacePaths[i], w, h);
-        if (!faceSprites_[i]) {
-            faceSprites_[i] = neutral;
-            Serial.printf("[Face] missing %s; using neutral\n", kFacePaths[i]);
+    lazyLoadStep_ = 0;
+    lazyLoadNextMs_ = millis() + 1000;
+}
+
+bool FaceController::loadNextDeferredSprite(bool ignoreSchedule) {
+    if (!display_ || !started_) return true;
+    if (lazyLoadStep_ >= 2 + static_cast<uint8_t>(Expression::Count)) return true;
+    uint32_t now = millis();
+    if (!ignoreSchedule && static_cast<int32_t>(now - lazyLoadNextMs_) < 0) return false;
+
+    int w = display_->width();
+    int h = display_->height();
+    switch (lazyLoadStep_) {
+        case 0:
+            blinkSprite_ =
+                display_->loadLayerSprite("/avatar/neutral_blink.png", w, h,
+                                          ScreenRenderer::kTransparentColor);
+            if (!blinkSprite_.valid()) Serial.println("[Face] blink image missing; blink disabled");
+            break;
+        case 1:
+        case 2: {
+            uint8_t mouthIndex = lazyLoadStep_;
+            mouthSprites_[mouthIndex] =
+                display_->loadLayerSprite(kMouthPaths[mouthIndex], w, h,
+                                          ScreenRenderer::kTransparentColor);
+            if (!mouthSprites_[mouthIndex].valid()) {
+                Serial.printf("[Face] missing %s; lipsync shape disabled\n",
+                              kMouthPaths[mouthIndex]);
+            }
+            if (static_cast<uint8_t>(currentMouth_) == mouthIndex) applyToDisplay();
+            break;
+        }
+        default: {
+            uint8_t faceIndex = lazyLoadStep_ - 2;
+            if (faceIndex < static_cast<uint8_t>(Expression::Count)) {
+                faceSprites_[faceIndex] = display_->loadSprite(kFacePaths[faceIndex], w, h);
+                if (!faceSprites_[faceIndex]) {
+                    Serial.printf("[Face] missing %s; using neutral\n", kFacePaths[faceIndex]);
+                }
+                if (static_cast<uint8_t>(currentExpression_) == faceIndex) applyToDisplay();
+            }
+            break;
         }
     }
-
-    for (uint8_t i = 0; i < static_cast<uint8_t>(MouthShape::Count); ++i) {
-        if (!kMouthPaths[i]) {
-            mouthSprites_[i] = {nullptr, 0, 0, ScreenRenderer::kTransparentColor};
-            continue;
-        }
-        mouthSprites_[i] =
-            display_->loadLayerSprite(kMouthPaths[i], w, h, ScreenRenderer::kTransparentColor);
-        if (!mouthSprites_[i].valid()) {
-            Serial.printf("[Face] missing %s; lipsync shape disabled\n", kMouthPaths[i]);
-        }
-    }
-
-    blinkSprite_ =
-        display_->loadLayerSprite("/avatar/neutral_blink.png", w, h,
-                                  ScreenRenderer::kTransparentColor);
-    if (!blinkSprite_.valid()) Serial.println("[Face] blink image missing; blink disabled");
+    ++lazyLoadStep_;
+    lazyLoadNextMs_ = now + 120;
+    return true;
 }
 
 void FaceController::update(bool speakerPlaying, float audioRms) {
     if (!started_ || !display_) return;
+    if (deferredLoadingEnabled_) loadNextDeferredSprite();
+
     uint32_t now = millis();
     bool changed = false;
 
@@ -187,6 +226,7 @@ void FaceController::scheduleBlink(uint32_t now) {
 void FaceController::applyToDisplay() {
     if (!display_) return;
     LGFX_Sprite* base = faceSprites_[static_cast<uint8_t>(currentExpression_)];
+    if (!base) base = faceSprites_[static_cast<uint8_t>(Expression::Neutral)];
 
     SpriteLayer mouth{nullptr, 0, 0, ScreenRenderer::kTransparentColor};
     if (currentMouth_ != MouthShape::None) {

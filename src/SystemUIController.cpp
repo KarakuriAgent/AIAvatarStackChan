@@ -30,6 +30,10 @@ SystemUIController::SystemUIController()
       touchLastY_(0),
       systemBarHeight_(36),
       menuHorizontalMargin_(40),
+      menuItemHeight_(24),
+      menuTextSize_(1),
+      menuPaddingX_(12),
+      menuPaddingY_(8),
       unhandledTapCb_(nullptr) {}
 
 void SystemUIController::begin(AIAvatar& avatar, const Config& config,
@@ -66,17 +70,18 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
     if (itemCount == 0) return;
 
     UiRect bounds = menuBounds();
-    const int itemH = 24;
-    const int paddingX = 12;
-    const int paddingY = 8;
+    const int itemH = menuItemHeight_;
+    const int paddingX = menuPaddingX_;
+    const int paddingY = menuPaddingY_;
+    const int textH = 8 * menuTextSize_;
 
     canvas->fillRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, 0x1082);
     canvas->drawRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, 0x4208);
-    canvas->setTextSize(1);
+    canvas->setTextSize(menuTextSize_);
 
     for (uint8_t i = 0; i < itemCount; ++i) {
         int itemY = bounds.y + paddingY + i * itemH;
-        int textY = itemY + (itemH - 8) / 2;
+        int textY = itemY + (itemH - textH) / 2;
 
         if (i == selected_) {
             canvas->fillRoundRect(bounds.x + 4, itemY + 2, bounds.w - 8, itemH - 4, 4, 0x001F);
@@ -332,8 +337,8 @@ uint8_t SystemUIController::menuItemCount() const {
 
 UiRect SystemUIController::menuBounds() const {
     uint8_t itemCount = menuItemCount();
-    const int itemH = 24;
-    const int paddingY = 8;
+    const int itemH = menuItemHeight_;
+    const int paddingY = menuPaddingY_;
     int displayW = M5.Display.width();
     int displayH = M5.Display.height();
     const int marginX = menuHorizontalMargin_;
@@ -349,8 +354,8 @@ int8_t SystemUIController::menuIndexAt(int16_t x, int16_t y) const {
     UiRect bounds = menuBounds();
     if (!bounds.contains(x, y)) return -1;
 
-    const int itemH = 24;
-    const int paddingY = 8;
+    const int itemH = menuItemHeight_;
+    const int paddingY = menuPaddingY_;
     int localY = y - bounds.y - paddingY;
     if (localY < 0) return -1;
     uint8_t index = localY / itemH;
