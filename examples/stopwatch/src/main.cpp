@@ -3,6 +3,7 @@
 
 #include "AIAvatarStackChan.h"
 #include "BuiltinAvatarImages.h"
+#include "UserConfig.h"
 
 static aiavatar::Config config;
 static aiavatar::ResourceProvider resources;
@@ -17,9 +18,7 @@ static constexpr uint8_t kStopWatchUprightRotation = 0;
 static constexpr uint8_t kStopWatchUpsideDownRotation = 2;
 static constexpr float kOrientationThreshold = 0.65f;
 static constexpr uint32_t kOrientationCheckIntervalMs = 250;
-static constexpr int16_t kFaceTapCenterX = kDisplayWidth / 2;
-static constexpr int16_t kFaceTapCenterY = kDisplayHeight / 2 + 18;
-static constexpr int16_t kFaceTapRadius = 142;
+static constexpr int16_t kFaceTapMinY = 140;
 static constexpr uint32_t kFaceTapCooldownMs = 2000;
 static constexpr uint32_t kOpenClawVibrationMs = 2000;
 static constexpr uint8_t kOpenClawVibrationLevel = 255;
@@ -32,33 +31,14 @@ static uint32_t vibrationUntilMs = 0;
 
 static bool handleFaceTap(int16_t x, int16_t y);
 static void handleStartMessage(const char* text);
+static void handleFinalMessage(const char* responseText, const char* voiceText);
 static void updatePhysicalButtons();
-
-static void addWifiNetwork(uint8_t index, const char* name, const char* ssid, const char* pass) {
-    if (index >= aiavatar::kMaxWifiNetworks) return;
-
-    auto& network = config.wifiNetworks[index];
-    strlcpy(network.name, name, sizeof(network.name));
-    strlcpy(network.ssid, ssid, sizeof(network.ssid));
-    strlcpy(network.pass, pass, sizeof(network.pass));
-    if (config.wifiNetworkCount <= index) {
-        config.wifiNetworkCount = index + 1;
-    }
-    if (index == 0) {
-        strlcpy(config.wifiSsid, ssid, sizeof(config.wifiSsid));
-        strlcpy(config.wifiPass, pass, sizeof(config.wifiPass));
-    }
-}
 
 static void configureStopWatchDisplay() {
     constexpr int16_t w = kDisplayWidth;
     constexpr int16_t h = kDisplayHeight;
 
     avatar.display().setImageFitMode(aiavatar::ImageFitMode::Cover);
-
-    // TTSにあわせて調整してね
-    avatar.speaker().setPcmGain(6.0f);
-
     avatar.visualEffects().setListeningGlowShape(aiavatar::ListeningGlowShape::Circle);
     avatar.visualEffects().setCircularListeningGlowWidth(10.5f);
     avatar.visualEffects().setCircularListeningGlowSeamlessGradient(true);
@@ -77,31 +57,24 @@ static void configureStopWatchDisplay() {
     avatar.statusOverlay().setVolumeIndicatorX(42);
 
     avatar.systemUI().setSystemBarHeight(118);
-    avatar.systemUI().setMenuHorizontalMargin(82);
-    avatar.systemUI().setVirtualButtonArea(aiavatar::ButtonId::A,
-                                           {(w - 110) / 2, h - 96, 110, 64});
-    avatar.systemUI().setVirtualButtonArea(aiavatar::ButtonId::B,
-                                           {w / 2 - 128, h - 96, 110, 64});
-    avatar.systemUI().setVirtualButtonArea(aiavatar::ButtonId::C,
-                                           {w / 2 + 18, h - 96, 110, 64});
-    avatar.systemUI().setButtonAction(aiavatar::ButtonId::A, aiavatar::ButtonAction::None);
+    avatar.systemUI().setMenuHorizontalMargin(52);
+    avatar.systemUI().setMenuItemHeight(58);
+    avatar.systemUI().setMenuTextSize(2);
+    avatar.systemUI().setMenuPadding(24, 16);
+    avatar.systemUI().setVirtualButtonsEnabled(false);
     avatar.systemUI().setTouchPushToTalkEnabled(false);
     avatar.systemUI().onUnhandledTap(handleFaceTap);
 }
 
-static bool isFaceTap(int16_t x, int16_t y) {
-    int32_t dx = x - kFaceTapCenterX;
-    int32_t dy = y - kFaceTapCenterY;
-    return dx * dx + dy * dy <= static_cast<int32_t>(kFaceTapRadius) * kFaceTapRadius;
-}
-
 static bool handleFaceTap(int16_t x, int16_t y) {
+    (void)x;
     if (physicalPttActive) return false;
-    if (!isFaceTap(x, y)) return false;
+    if (y < kFaceTapMinY) return false;
 
     uint32_t now = millis();
     if (now - lastFaceTapMs < kFaceTapCooldownMs) return true;
     lastFaceTapMs = now;
+    avatar.resetSleepTimer("face tap");
 
     static constexpr const char* kPrompt =
         "$The user poked your face on the screen. React with one very short phrase. "
@@ -114,15 +87,16 @@ static bool handleFaceTap(int16_t x, int16_t y) {
     return true;
 }
 
-static bool startsWith(const char* text, const char* prefix) {
-    if (!text || !prefix) return false;
-    return strncmp(text, prefix, strlen(prefix)) == 0;
-}
-
 static void handleStartMessage(const char* text) {
-    if (!startsWith(text, kOpenClawResponsePrefix)) return;
+    Serial.printf("[Main] User: %s\n", text ? text : "");
+    if (!text || strncmp(text, kOpenClawResponsePrefix, strlen(kOpenClawResponsePrefix)) != 0) return;
     M5.Power.setVibration(kOpenClawVibrationLevel);
     vibrationUntilMs = millis() + kOpenClawVibrationMs;
+}
+
+static void handleFinalMessage(const char* responseText, const char* voiceText) {
+    (void)responseText;
+    Serial.printf("[Main] StackChan: %s\n", voiceText ? voiceText : "");
 }
 
 static void updateVibration() {
@@ -136,8 +110,10 @@ static void updatePhysicalPushToTalk() {
     bool pressed = M5.BtnB.isPressed();
 
     if (pressed && !physicalPttActive) {
+        avatar.resetSleepTimer("button B down");
         physicalPttActive = avatar.startPushToTalk();
     } else if (!pressed && physicalPttActive) {
+        avatar.resetSleepTimer("button B up");
         avatar.endPushToTalk();
         physicalPttActive = false;
     }
@@ -145,7 +121,11 @@ static void updatePhysicalPushToTalk() {
 
 static void updatePhysicalButtons() {
     if (M5.BtnA.wasClicked()) {
+        avatar.resetSleepTimer("button A");
         avatar.cycleVolume();
+    }
+    if (M5.BtnB.wasClicked()) {
+        avatar.resetSleepTimer("button B");
     }
     updatePhysicalPushToTalk();
 }
@@ -180,10 +160,9 @@ static void updateDisplayOrientation() {
 void setup() {
     Serial.begin(115200);
     uint32_t serialStart = millis();
-    while (!Serial && millis() - serialStart < 3000) {
+    while (!Serial && millis() - serialStart < 100) {
         delay(10);
     }
-    delay(300);
     Serial.println();
     Serial.println("[Main] boot");
 
@@ -192,16 +171,8 @@ void setup() {
     Serial.println("[Main] M5 initialized");
     Serial.printf("[Main] heap=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreePsram());
 
-    // Minimum built-in settings.
-    addWifiNetwork(0, "Home WiFi", "your-ssid", "your-pass");
-    // addWifiNetwork(1, "Mobile", "your-mobile-ssid", "your-mobile-pass"); // Add as needed.
-    strlcpy(config.wsHost, "192.168.1.1", sizeof(config.wsHost));
-    config.wsPort = 8000;
-    strlcpy(config.wsPath, "/ws", sizeof(config.wsPath));
-    strlcpy(config.userId, "stopwatch-user", sizeof(config.userId));
-
-    // Add extra settings here instead of config.json.
-    config.speakerVolume = 255;
+    applyUserConfig(config);
+    applyUserHardwareConfig();
 
     // Load built-in image resources.
     resources.setBuiltinAssets(aiavatar::kBuiltinAssets,
@@ -212,6 +183,7 @@ void setup() {
     currentDisplayRotation = config.displayRotation;
     configureStopWatchDisplay();
     avatar.onStart(handleStartMessage);
+    avatar.onFinal(handleFinalMessage);
 
     if (!avatar.begin(config, resources)) {
         Serial.println("[Main] AIAvatar init failed");

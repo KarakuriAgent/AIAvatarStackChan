@@ -130,6 +130,7 @@ Here are the default controls built into the firmware.
   - `name` (string): menu display name
   - `ssid` (string): Wi-Fi SSID. Entries with an empty SSID are ignored
   - `pass` (string): Wi-Fi password
+  - `sleep_wifi_mode` (string): optional per-network sleep Wi-Fi behavior. `sleep` or `off`
 - `ws_host` (string): AIAvatarKit WebSocket server host
 - `ws_port` (number): AIAvatarKit WebSocket server port
 - `ws_path` (string): AIAvatarKit WebSocket server path
@@ -145,6 +146,8 @@ Here are the default controls built into the firmware.
 - `start_threshold` (number): number of queued samples required before playback starts
 - `drain_timeout_ms` (number): playback queue drain timeout in ms
 - `speaker_volume` (number): initial speaker volume. 0 to 255
+- `audio_normalize_target_peak` (number): target playback peak used for automatic audio normalization. 0.0 disables normalization, 1.0 targets full scale
+- `audio_normalize_max_gain` (number): maximum gain multiplier applied by automatic audio normalization. Minimum 1.0
 - `volume_levels` (array): volume values cycled by the volume button. 2 to 8 entries, each 0 to 255
 - `audio_task_stack_size` (number): stack size for audio tasks
 - `audio_task_core` (number): CPU core assigned to audio tasks
@@ -156,6 +159,10 @@ Here are the default controls built into the firmware.
 - `keepalive_interval_ms` (number): keepalive send interval in ms
 - `display_rotation` (number): display rotation setting
 - `display_brightness` (number): display brightness
+- `sleep_enabled` (boolean): whether to enable idle sleep mode
+- `sleep_timeout_ms` (number): idle time in ms before entering sleep
+- `sleep_display_brightness` (number): display brightness while sleeping. 0 to 255
+- `sleep_wifi_mode` (string): default sleep Wi-Fi behavior. `sleep` keeps Wi-Fi associated with modem sleep; `off` powers Wi-Fi down and reconnects on wake
 - `status_overlay_enabled` (boolean): whether to show the status overlay
 - `vision_preview_duration_ms` (number): camera preview duration for vision requests in ms. Default: `2000`
 - `accepted_led_color` (array): RGB color for the accepted-state LED. Example: `[0, 168, 0]`
@@ -167,6 +174,7 @@ Here are the default controls built into the firmware.
 - `stackchan_auto_angle_sync` (boolean): whether to synchronize StackChan posture from the physical servo position
 - `nade_invoke_prompt` (string): prompt sent when StackChan touch/nade is detected
 - `vision_invoke_prompt` (string): prompt sent with camera images
+- `fast_startup` (boolean): whether to start the display, mic, and UI first, then defer Wi-Fi, WebSocket, speaker, and heavy image loading so the device becomes interactive sooner
 - `debug_log` (boolean): whether to output debug logs
 
 If `stackchan_auto_angle_sync` causes sudden servo jumps on your hardware, set it to `false`.
@@ -299,6 +307,101 @@ Available actions:
 - `ButtonAction::MicToggle`
 
 
+## 💤 Sleep Mode
+
+Sleep mode reduces idle power use by dimming the display and optionally reducing Wi-Fi power after a period without user activity, speech playback, Push-to-Talk, or server processing.
+
+Enable it in `config.json`:
+
+```json
+{
+  "sleep_enabled": true,
+  "sleep_timeout_ms": 60000,
+  "sleep_display_brightness": 32,
+  "sleep_wifi_mode": "sleep"
+}
+```
+
+Or set it directly in firmware code:
+
+```cpp
+config.sleepEnabled = true;
+config.sleepTimeoutMs = 60000;
+config.sleepDisplayBrightness = 32;
+config.sleepWifiMode = aiavatar::SleepWifiMode::Sleep;
+```
+
+Wi-Fi behavior:
+
+- `sleep`: enables Wi-Fi modem sleep while keeping the connection state. Wake is usually immediate. If the WebSocket was disconnected while sleeping, the framework reconnects it on wake.
+- `off`: disconnects the WebSocket, powers Wi-Fi off, and reconnects to the Wi-Fi profile that was active when sleep started. This saves more power, but wake takes longer and some mobile tethering access points may stop advertising while the device is disconnected.
+
+You can override Wi-Fi sleep behavior per network:
+
+```json
+{
+  "sleep_wifi_mode": "off",
+  "wifi_networks": [
+    {
+      "name": "Home",
+      "ssid": "home-ssid",
+      "pass": "home-password",
+      "sleep_wifi_mode": "off"
+    },
+    {
+      "name": "Mobile",
+      "ssid": "phone-tethering",
+      "pass": "mobile-password",
+      "sleep_wifi_mode": "sleep"
+    }
+  ]
+}
+```
+
+`SleepManager` is owned by `AIAvatar`. Once `sleep_enabled` is true, `avatar.begin(config)` initializes sleep handling and `avatar.update()` manages the sleep timer, display brightness, Wi-Fi mode, and WebSocket reconnects. User code does not need to create a `SleepManager`.
+
+> **Note:** When `fast_startup` is enabled, sleep waits until deferred startup is complete. If the device cannot connect to Wi-Fi during startup, deferred startup may remain incomplete and sleep mode will not start. This is intentional for now so sleep does not interrupt partially initialized startup work.
+
+Built-in activity sources automatically reset the sleep timer:
+
+- Touch handled by `SystemUIController`
+- Push-to-Talk through `avatar.startPushToTalk()` / `avatar.endPushToTalk()`
+- Volume, microphone, WebSocket, Wi-Fi menu, and stop actions routed through `AIAvatar` / `SystemUIController`
+- Server response start, tool calls, vision requests, accepted events, and StackChan nade events
+- Speech playback while the speaker is playing, plus playback end
+
+For app-specific input that the framework cannot see, call `avatar.resetSleepTimer(reason)` before or during the action:
+
+```cpp
+if (M5.BtnA.wasClicked()) {
+    avatar.resetSleepTimer("button A");
+    avatar.cycleVolume();
+}
+```
+
+For long-running app work, keep the main loop non-blocking and reset the sleep timer while that work is active. Track the task state in your app, then call `avatar.resetSleepTimer("your work")` from `loop()` at a modest interval:
+
+```cpp
+uint32_t lastSleepResetMs = 0;
+
+void loop() {
+    avatar.update();
+    userApp.update();
+
+    if (millis() - lastSleepResetMs >= 1000) {
+        lastSleepResetMs = millis();
+        if (userApp.isLongTaskRunning()) {
+            avatar.resetSleepTimer("long task");
+        }
+    }
+
+    delay(1);
+}
+```
+
+Touch wake behavior is intentionally conservative. If the device is already sleeping, the first screen tap wakes the display and Wi-Fi state, then the current tap event is consumed so it does not also trigger a UI action. If the user keeps holding the screen, the next update cycles can still start touch Push-to-Talk after the hold threshold. Physical buttons or app-specific inputs should call `avatar.resetSleepTimer(...)` and then run their normal action, so a button press can wake and perform its intended function.
+
+
 ## 🛠️ Customization
 
 You can add project-specific behavior directly in `main.cpp`, or keep it in a separate application module.
@@ -328,6 +431,7 @@ graph TD;
     UI[SystemUIController];
     STATUS[StatusOverlay];
     EFFECTS[VisualEffects];
+    SLEEP[SleepManager];
     CAMERA[CameraController];
     OPENCLAW[OpenClawEffects];
     STACKCHAN[StackChanHardware];
@@ -348,6 +452,7 @@ graph TD;
     AVATAR --> UI;
     AVATAR --> STATUS;
     AVATAR --> EFFECTS;
+    AVATAR --> SLEEP;
     AVATAR --> CAMERA;
     AVATAR --> OPENCLAW;
     AVATAR --> STACKCHAN;
@@ -377,6 +482,7 @@ graph TD;
 | `SystemUIController` | Handles virtual buttons, Wi-Fi selection UI, and built-in button actions. |
 | `StatusOverlay` | Draws connection, Wi-Fi, battery, volume, and microphone status. |
 | `VisualEffects` | Draws transient UI effects such as voice detection. |
+| `SleepManager` | Manages idle sleep, display dimming, Wi-Fi sleep/off behavior, wake handling, and WebSocket reconnect after wake. |
 | `CameraController` | Captures camera images for vision requests. |
 | `OpenClawEffects` | Adds optional OpenClaw-specific LED and screen effects. |
 | `HardwareAdapter` | Abstracts hardware-specific motion and LED operations. |

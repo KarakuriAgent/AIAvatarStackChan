@@ -36,6 +36,10 @@ void setup() {
         while (true) delay(1000);
     }
 
+    // Uncomment to show the neutral face and start PTT recording as early as possible.
+    // Tradeoff: blink, mouth sprites, speaker, WebSocket, and other assets become ready gradually after boot.
+    // config.fastStartup = true;
+
     // Remove `avatar.useStackChan()` if you want to run CoreS3 without Stack-chan hardware
     avatar.useStackChan();
 
