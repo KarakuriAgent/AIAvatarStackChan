@@ -38,7 +38,8 @@ SpeakerOutput::SpeakerOutput()
       lastChunkPeak_(0.0f),
       lastChunkClippedSamples_(0),
       playbackFrameCount_(0),
-      lastAudioStatsLogMs_(0) {}
+      lastAudioStatsLogMs_(0),
+      audioStatsLogEnabled_(false) {}
 
 bool SpeakerOutput::begin(size_t queueDepth, size_t startThreshold) {
     queueDepth_ = queueDepth > 0 ? queueDepth : 64;
@@ -112,7 +113,6 @@ bool SpeakerOutput::begin(size_t queueDepth, size_t startThreshold) {
 void SpeakerOutput::startHardware() {
     if (hardwareStarted_) return;
     M5.Speaker.begin();
-    setStopWatchPaPin(false);
     hardwareStarted_ = true;
     M5.Speaker.setVolume(volume_);
     auto spkcfg = M5.Speaker.config();
@@ -128,7 +128,6 @@ void SpeakerOutput::stopHardware() {
     if (!hardwareStarted_) return;
     while (M5.Speaker.isPlaying()) delay(1);
     M5.Speaker.end();
-    setStopWatchPaPin(false);
     hardwareStarted_ = false;
     playing_ = false;
 }
@@ -165,18 +164,6 @@ void SpeakerOutput::applyCodecDacVolume() {
                                        codecDacVolume_, 100000);
     Serial.printf("[Speaker] ES8311 DAC volume reg 0x32=0x%02X %s\n",
                   codecDacVolume_, ok ? "ok" : "failed");
-}
-
-void SpeakerOutput::setStopWatchPaPin(bool enabled) {
-#if defined(ESP32S3)
-    if (M5.getBoard() != m5::board_t::board_M5StopWatch) return;
-
-    static constexpr uint8_t kStopWatchSpeakerPaPin = 14;
-    pinMode(kStopWatchSpeakerPaPin, OUTPUT);
-    digitalWrite(kStopWatchSpeakerPaPin, LOW);
-    Serial.printf("[Speaker] StopWatch GPIO14 PA bypass requested=%s actual=off\n",
-                  enabled ? "on" : "off");
-#endif
 }
 
 bool SpeakerOutput::enqueueFormat(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample) {
@@ -516,6 +503,8 @@ float SpeakerOutput::computePlaybackGain() const {
 }
 
 void SpeakerOutput::logAudioStats(size_t sampleCount) {
+    if (!audioStatsLogEnabled_) return;
+
     ++playbackFrameCount_;
 
     uint32_t now = millis();
