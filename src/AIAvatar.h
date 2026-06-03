@@ -169,6 +169,7 @@ private:
     static void onFinalTextStatic(const char* responseText, const char* voiceText);
     static void onStopStatic();
     static void onProcessingStatic(bool processing);
+    static void onErrorStatic();
     static void onStartStatic(const char* text);
     static void onToolCallStatic(const char* toolName);
     static void onVisionStatic();

@@ -49,6 +49,7 @@ public:
     void onFinal(SimpleCallback cb) { finalCb_ = cb; }
     void onFinalText(FinalTextCallback cb) { finalTextCb_ = cb; }
     void onAccepted(SimpleCallback cb) { acceptedCb_ = cb; }
+    void onError(SimpleCallback cb) { errorCb_ = cb; }
     void onServerSpeechDetected(SimpleCallback cb) { serverSpeechDetectedCb_ = cb; }
     void onProcessing(ProcessingCallback cb) { processingCb_ = cb; }
     void onFace(FaceCallback cb) { faceCb_ = cb; }
@@ -97,6 +98,7 @@ private:
     SimpleCallback finalCb_;
     FinalTextCallback finalTextCb_;
     SimpleCallback acceptedCb_;
+    SimpleCallback errorCb_;
     SimpleCallback serverSpeechDetectedCb_;
     ProcessingCallback processingCb_;
     FaceCallback faceCb_;

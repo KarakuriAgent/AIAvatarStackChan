@@ -36,6 +36,7 @@ WebSocketClient::WebSocketClient()
       finalCb_(nullptr),
       finalTextCb_(nullptr),
       acceptedCb_(nullptr),
+      errorCb_(nullptr),
       serverSpeechDetectedCb_(nullptr),
       processingCb_(nullptr),
       faceCb_(nullptr),
@@ -567,6 +568,7 @@ void WebSocketClient::onEvent(WStype_t type, uint8_t* payload, size_t length) {
 
         case WStype_ERROR:
             Serial.printf("[WS] error len=%u %.*s\n", static_cast<unsigned>(length), static_cast<int>(length), payload ? reinterpret_cast<const char*>(payload) : "");
+            if (errorCb_) errorCb_();
             break;
 
         case WStype_TEXT: {
@@ -605,7 +607,13 @@ void WebSocketClient::onEvent(WStype_t type, uint8_t* payload, size_t length) {
                 if (stopCb_) stopCb_();
                 return;
             }
-            if (strcmp(msgType, "error") == 0 || strcmp(msgType, "canceled") == 0) {
+            if (strcmp(msgType, "canceled") == 0) {
+                if (stopCb_) stopCb_();
+                if (processingCb_) processingCb_(false);
+                return;
+            }
+            if (strcmp(msgType, "error") == 0) {
+                if (errorCb_) errorCb_();
                 if (processingCb_) processingCb_(false);
                 return;
             }
@@ -625,8 +633,8 @@ void WebSocketClient::onEvent(WStype_t type, uint8_t* payload, size_t length) {
             if (strcmp(msgType, "start") == 0) {
                 const char* requestText =
                     doc["metadata"]["request_text"] | static_cast<const char*>(nullptr);
-                if (startCb_) startCb_(requestText);
                 if (processingCb_) processingCb_(true);
+                if (startCb_) startCb_(requestText);
             }
 
             if (audioChunkCb_) {

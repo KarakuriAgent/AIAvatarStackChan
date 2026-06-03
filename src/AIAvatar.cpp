@@ -147,6 +147,7 @@ bool AIAvatar::begin(const Config& config) {
     ws_.onToolCall(AIAvatar::onToolCallStatic);
     ws_.onVision(AIAvatar::onVisionStatic);
     ws_.onAccepted(AIAvatar::onAcceptedStatic);
+    ws_.onError(AIAvatar::onErrorStatic);
     if (config_.wsHost[0] != '\0') {
         ws_.begin(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
                   config_.wsReconnectIntervalMs, config_.channel, config_.apiKey);
@@ -220,6 +221,7 @@ void AIAvatar::cycleVolume() {
 bool AIAvatar::startPushToTalk() {
     if (!micMuted_ || !pttBuf_) return false;
     serverProcessing_ = false;
+    visualEffects_.setProcessing(false);
     speaker_.requestImmediateStop();
     mic_.clearQueue();
     pttBufPos_ = 0;
@@ -747,6 +749,9 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
                             durationMs);
     }
     if (chunk.pcmData && chunk.pcmSamples > 0) {
+        s_instance->visualEffects_.setProcessing(false);
+        s_instance->visualEffects_.clearToolPulse();
+        s_instance->display_.setDirty();
         if (chunk.sampleRate > 0) {
             speaker.enqueueFormat(chunk.sampleRate, 1, 16);
         }
@@ -755,7 +760,11 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
 }
 
 void AIAvatar::onFinalStatic() {
-    if (s_instance) s_instance->speaker_.enqueueEnd();
+    if (!s_instance) return;
+    s_instance->visualEffects_.setProcessing(false);
+    s_instance->visualEffects_.clearToolPulse();
+    s_instance->display_.setDirty();
+    s_instance->speaker_.enqueueEnd();
 }
 
 void AIAvatar::onFinalTextStatic(const char* responseText, const char* voiceText) {
@@ -766,11 +775,26 @@ void AIAvatar::onFinalTextStatic(const char* responseText, const char* voiceText
 void AIAvatar::onStopStatic() {
     if (!s_instance) return;
     s_instance->serverProcessing_ = false;
+    s_instance->visualEffects_.setProcessing(false);
+    s_instance->visualEffects_.clearToolPulse();
+    s_instance->display_.setDirty();
     s_instance->speaker_.enqueueStop();
 }
 
 void AIAvatar::onProcessingStatic(bool processing) {
-    if (s_instance) s_instance->serverProcessing_ = processing;
+    if (!s_instance) return;
+    s_instance->serverProcessing_ = processing;
+    s_instance->visualEffects_.setProcessing(processing);
+    s_instance->display_.setDirty();
+}
+
+void AIAvatar::onErrorStatic() {
+    if (!s_instance) return;
+    s_instance->serverProcessing_ = false;
+    s_instance->visualEffects_.setProcessing(false);
+    s_instance->visualEffects_.clearToolPulse();
+    s_instance->visualEffects_.showErrorFlash();
+    s_instance->display_.setDirty();
 }
 
 void AIAvatar::onStartStatic(const char* text) {
@@ -782,6 +806,8 @@ void AIAvatar::onStartStatic(const char* text) {
 
 void AIAvatar::onToolCallStatic(const char* toolName) {
     if (!s_instance) return;
+    s_instance->visualEffects_.showToolPulse();
+    s_instance->display_.setDirty();
     if (!s_instance->openClaw_.handleToolCall(toolName)) {
         s_instance->leds_.startToolPulse();
     }
@@ -790,6 +816,10 @@ void AIAvatar::onToolCallStatic(const char* toolName) {
 
 void AIAvatar::onVisionStatic() {
     if (!s_instance) return;
+    s_instance->visualEffects_.setProcessing(false);
+    s_instance->visualEffects_.clearToolPulse();
+    s_instance->visualEffects_.showVisionFlash();
+    s_instance->display_.setDirty();
     s_instance->leds_.startVisionFlash();
     s_instance->visionRequestPending_ = true;
 }
@@ -797,6 +827,9 @@ void AIAvatar::onVisionStatic() {
 void AIAvatar::onAcceptedStatic() {
     if (!s_instance) return;
     s_instance->interruptPlaybackForNewResponse();
+    s_instance->visualEffects_.clearToolPulse();
+    s_instance->visualEffects_.showAccepted();
+    s_instance->display_.setDirty();
     s_instance->leds_.startAcceptedFlash();
     if (s_instance->userAcceptedCb_) s_instance->userAcceptedCb_();
 }
