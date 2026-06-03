@@ -44,6 +44,7 @@ public:
     float pcmGain() const { return pcmGain_; }
     void setCodecDacVolume(uint8_t value) { codecDacVolume_ = value; }
     void setAutoNormalize(float targetPeak, float maxGain = 8.0f);
+    void setAudioStatsLogEnabled(bool enabled) { audioStatsLogEnabled_ = enabled; }
 
     bool enqueueFormat(uint32_t sampleRate, uint8_t channels, uint8_t bitsPerSample);
     bool enqueuePcmFrame(const int16_t* samples, size_t sampleCount);
@@ -101,6 +102,7 @@ private:
     size_t lastChunkClippedSamples_;
     uint32_t playbackFrameCount_;
     uint32_t lastAudioStatsLogMs_;
+    bool audioStatsLogEnabled_;
 
     bool lockState(uint32_t timeoutMs = portMAX_DELAY);
     void unlockState();
@@ -110,7 +112,6 @@ private:
     bool enqueueEventLocked(const PlaybackEvent& event);
     void releaseFrameLocked(const PlaybackEvent& event);
     void applyCodecDacVolume();
-    void setStopWatchPaPin(bool enabled);
     void updateRms(const int16_t* samples, size_t sampleCount);
     float computePlaybackGain() const;
     void logAudioStats(size_t sampleCount);
