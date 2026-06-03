@@ -21,6 +21,7 @@ SleepManager::SleepManager()
       wifiSleepActive_(false),
       wifiWakeCheckPending_(false),
       websocketWakeCheckPending_(false),
+      wakeActivityTriggered_(false),
       activeWifiMode_(SleepWifiMode::Sleep) {
     sleepWifiSsid_[0] = '\0';
     sleepWifiPass_[0] = '\0';
@@ -36,6 +37,7 @@ void SleepManager::begin(AIAvatar& avatar, const Config& config) {
     wifiSleepActive_ = false;
     wifiWakeCheckPending_ = false;
     websocketWakeCheckPending_ = false;
+    wakeActivityTriggered_ = false;
     sleepWifiSsid_[0] = '\0';
     sleepWifiPass_[0] = '\0';
 }
@@ -45,9 +47,16 @@ uint8_t SleepManager::currentDisplayBrightness() const {
     return sleeping_ ? config_->sleepDisplayBrightness : config_->displayBrightness;
 }
 
-void SleepManager::noteActivity(const char* reason) {
+void SleepManager::resetSleepTimer(const char* reason) {
     lastActivityMs_ = millis();
-    if (sleeping_) wake(reason);
+    if (sleeping_) {
+        wakeActivityTriggered_ = true;
+        wake(reason);
+    }
+}
+
+void SleepManager::resetWakeActivity() {
+    wakeActivityTriggered_ = false;
 }
 
 void SleepManager::wake(const char* reason) {
@@ -69,7 +78,6 @@ void SleepManager::update() {
     if (!avatar_ || !config_ || !config_->sleepEnabled) return;
 
     uint32_t now = millis();
-    updateTouchActivity();
     updateSpeakerActivity();
     updateWifiWakeCheck();
     updateWebSocketWakeCheck();
@@ -89,19 +97,13 @@ void SleepManager::update() {
     enterSleep();
 }
 
-void SleepManager::updateTouchActivity() {
-    if (!M5.Touch.isEnabled()) return;
-    auto detail = M5.Touch.getDetail();
-    if (detail.wasPressed()) noteActivity("touch");
-}
-
 void SleepManager::updateSpeakerActivity() {
     bool speakerPlaying = avatar_->speaker().isPlaying();
     uint32_t now = millis();
     if (speakerPlaying) {
         lastActivityMs_ = now;
     } else if (lastSpeakerPlaying_) {
-        noteActivity("speech ended");
+        resetSleepTimer("speech ended");
         Serial.println("[Sleep] activity: speech ended");
     }
     lastSpeakerPlaying_ = speakerPlaying;

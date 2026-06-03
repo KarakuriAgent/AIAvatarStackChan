@@ -93,9 +93,13 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     }
 
     if (config_.fastStartup) {
-        return beginFast();
+        bool ok = beginFast();
+        if (ok) sleepManager_.begin(*this, config_);
+        return ok;
     }
-    return beginNormal();
+    bool ok = beginNormal();
+    if (ok) sleepManager_.begin(*this, config_);
+    return ok;
 }
 
 bool AIAvatar::beginFast() {
@@ -265,6 +269,7 @@ bool AIAvatar::beginNormal() {
 
 void AIAvatar::update() {
     if (config_.fastStartup) updateDeferredStartup();
+    sleepManager_.resetWakeActivity();
     if (!motion_.updateHardware()) {
         M5.update();
     }
@@ -288,6 +293,7 @@ void AIAvatar::update() {
     updateVisionPreview();
     updateStatusOverlay();
     display_.update();
+    sleepManager_.update();
 }
 
 void AIAvatar::updateDeferredStartup() {
@@ -408,6 +414,7 @@ void AIAvatar::beginDeferredOpenClaw() {
 }
 
 void AIAvatar::setVolume(uint8_t volume) {
+    resetSleepTimer("volume");
     volumeLevelIndex_ = nearestVolumeLevel(volume);
     volume_ = config_.volumeLevels[volumeLevelIndex_];
     volumeOverlayUntilMs_ = millis() + 2000;
@@ -417,6 +424,7 @@ void AIAvatar::setVolume(uint8_t volume) {
 
 void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
     if (config_.volumeLevelCount == 0) return;
+    resetSleepTimer("volume");
     if (levelIndex >= config_.volumeLevelCount) levelIndex = config_.volumeLevelCount - 1;
     volumeLevelIndex_ = levelIndex;
     volume_ = config_.volumeLevels[volumeLevelIndex_];
@@ -426,11 +434,13 @@ void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
 }
 
 void AIAvatar::setMicMuted(bool muted) {
+    resetSleepTimer("mic mute");
     micMuted_ = muted;
     display_.setDirty();
 }
 
 void AIAvatar::toggleMicMuted() {
+    resetSleepTimer("mic mute");
     micMuted_ = !micMuted_;
     display_.setDirty();
 }
@@ -453,6 +463,7 @@ bool AIAvatar::startPushToTalk() {
     pttSendRetryMs_ = 0;
     pttStartMs_ = millis();
     pushToTalkActive_ = true;
+    resetSleepTimer("PTT start");
     display_.setDirty();
     Serial.println("[AIAvatar] PTT start");
     return true;
@@ -460,6 +471,7 @@ bool AIAvatar::startPushToTalk() {
 
 void AIAvatar::endPushToTalk() {
     if (!pushToTalkActive_) return;
+    resetSleepTimer("PTT end");
     pushToTalkActive_ = false;
     visualEffects_.clearVoiceDetected();
 
@@ -490,6 +502,7 @@ void AIAvatar::setOpenClawEffectEnabled(bool enabled) {
 }
 
 void AIAvatar::sendStop() {
+    resetSleepTimer("stop");
     wsStopPending_ = true;
 }
 
@@ -505,6 +518,7 @@ void AIAvatar::switchWiFi(uint8_t networkIndex) {
     if (networkIndex >= config_.wifiNetworkCount) return;
     const auto& network = config_.wifiNetworks[networkIndex];
     if (!network.ssid[0]) return;
+    resetSleepTimer("WiFi switch");
 
     pendingWifiIndex_ = networkIndex;
     wifiSwitching_ = true;
@@ -786,7 +800,12 @@ void AIAvatar::handleVisionRequest() {
 }
 
 bool AIAvatar::invokeText(const char* text) {
+    resetSleepTimer("invoke text");
     return queueInvokeText(text);
+}
+
+void AIAvatar::resetSleepTimer(const char* reason) {
+    sleepManager_.resetSleepTimer(reason);
 }
 
 bool AIAvatar::queueInvokeText(const char* text) {
@@ -1045,6 +1064,7 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
 
 void AIAvatar::onFinalStatic() {
     if (!s_instance) return;
+    s_instance->resetSleepTimer("final");
     if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
     if (s_instance->speakerReady_) s_instance->speaker_.enqueueEnd();
 }
@@ -1063,6 +1083,7 @@ void AIAvatar::onStopStatic() {
 
 void AIAvatar::onProcessingStatic(bool processing) {
     if (!s_instance) return;
+    if (processing) s_instance->resetSleepTimer("processing");
     s_instance->serverProcessing_ = processing;
     if (s_instance->config_.fastStartup && !processing) {
         s_instance->heavyDeferredResumeMs_ = millis() + 500;
@@ -1071,6 +1092,7 @@ void AIAvatar::onProcessingStatic(bool processing) {
 
 void AIAvatar::onStartStatic(const char* text) {
     if (!s_instance) return;
+    s_instance->resetSleepTimer("speech start");
     s_instance->interruptPlaybackForNewResponse();
     s_instance->openClaw_.handleResponseStart(text);
     if (s_instance->userStartCb_) s_instance->userStartCb_(text);
@@ -1078,6 +1100,7 @@ void AIAvatar::onStartStatic(const char* text) {
 
 void AIAvatar::onToolCallStatic(const char* toolName) {
     if (!s_instance) return;
+    s_instance->resetSleepTimer("tool call");
     if (!s_instance->openClaw_.handleToolCall(toolName)) {
         s_instance->leds_.startToolPulse();
     }
@@ -1086,12 +1109,14 @@ void AIAvatar::onToolCallStatic(const char* toolName) {
 
 void AIAvatar::onVisionStatic() {
     if (!s_instance) return;
+    s_instance->resetSleepTimer("vision");
     s_instance->leds_.startVisionFlash();
     s_instance->visionRequestPending_ = true;
 }
 
 void AIAvatar::onAcceptedStatic() {
     if (!s_instance) return;
+    s_instance->resetSleepTimer("accepted");
     s_instance->interruptPlaybackForNewResponse();
     s_instance->leds_.startAcceptedFlash();
     if (s_instance->userAcceptedCb_) s_instance->userAcceptedCb_();
@@ -1099,6 +1124,7 @@ void AIAvatar::onAcceptedStatic() {
 
 void AIAvatar::onNadeStatic() {
     if (!s_instance) return;
+    s_instance->resetSleepTimer("nade");
     if (s_instance->ws_.isConnected()) {
         struct tm ti;
         time_t now = time(nullptr);

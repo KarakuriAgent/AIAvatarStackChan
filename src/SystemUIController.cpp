@@ -53,6 +53,7 @@ void SystemUIController::update() {
     if (!M5.Touch.isEnabled()) return;
     auto detail = M5.Touch.getDetail();
     recordTouch(detail);
+    if (avatar_->wasSleepWakeTriggered()) return;
     updateHold(detail);
     if (consumeSwipe(detail)) return;
 
@@ -248,6 +249,7 @@ void SystemUIController::closeMenu() {
 
 void SystemUIController::recordTouch(const m5::touch_detail_t& detail) {
     if (detail.wasPressed()) {
+        avatar_->resetSleepTimer("touch");
         touchActive_ = true;
         touchHeld_ = false;
         touchStartMs_ = millis();
