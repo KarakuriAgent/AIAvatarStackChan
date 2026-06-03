@@ -10,6 +10,7 @@
 #include "MotionController.h"
 #include "OpenClawEffects.h"
 #include "ResourceProvider.h"
+#include "SleepManager.h"
 #include "StackChanHardware.h"
 #include "StatusOverlay.h"
 #include "SystemUIController.h"
@@ -45,6 +46,7 @@ public:
     void disconnectWebSocket();
     void switchWiFi(uint8_t networkIndex);
     bool invokeText(const char* text);
+    void resetSleepTimer(const char* reason);
 
     WebSocketClient& websocket() { return ws_; }
     MicrophoneInput& microphone() { return mic_; }
@@ -67,6 +69,10 @@ public:
     bool isMicMuted() const { return micMuted_; }
     bool isServerProcessing() const { return serverProcessing_; }
     bool isPushToTalkActive() const { return pushToTalkActive_; }
+    bool isSleeping() const { return sleepManager_.isSleeping(); }
+    bool isWifiOffForSleep() const { return sleepManager_.isWifiOff(); }
+    bool wasSleepWakeTriggered() const { return sleepManager_.wakeActivityTriggered(); }
+    uint8_t currentDisplayBrightness() const { return sleepManager_.currentDisplayBrightness(); }
     bool isStartupComplete() const {
         return !config_.fastStartup ||
                (deferredStartupStage_ >= 7 && face_.deferredLoadingComplete());
@@ -101,6 +107,7 @@ private:
     SystemUIController systemUI_;
     VisualEffects visualEffects_;
     OpenClawEffects openClaw_;
+    SleepManager sleepManager_;
     ResourceProvider defaultResources_;
 
     volatile bool micMuted_;

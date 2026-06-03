@@ -13,12 +13,14 @@ public:
     SleepManager();
 
     void begin(AIAvatar& avatar, const Config& config);
-    void noteActivity(const char* reason);
+    void resetSleepTimer(const char* reason);
+    void resetWakeActivity();
     void update();
 
     bool isSleeping() const { return sleeping_; }
     bool isWifiOff() const { return wifiOffActive_; }
     bool isWifiSleepActive() const { return wifiSleepActive_; }
+    bool wakeActivityTriggered() const { return wakeActivityTriggered_; }
     uint8_t currentDisplayBrightness() const;
 
 private:
@@ -33,13 +35,13 @@ private:
     bool wifiSleepActive_;
     bool wifiWakeCheckPending_;
     bool websocketWakeCheckPending_;
+    bool wakeActivityTriggered_;
     SleepWifiMode activeWifiMode_;
     char sleepWifiSsid_[64];
     char sleepWifiPass_[64];
 
     void wake(const char* reason);
     void enterSleep();
-    void updateTouchActivity();
     void updateSpeakerActivity();
     void enterWifiSleep();
     void exitWifiSleep(const char* reason);
