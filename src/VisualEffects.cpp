@@ -107,7 +107,6 @@ VisualEffects::VisualEffects()
       toolUntilMs_(0),
       visionUntilMs_(0),
       errorUntilMs_(0),
-      processingUntilMs_(0),
       lastFrameMs_(0),
       voiceVisible_(false),
       acceptedVisible_(false),
@@ -160,7 +159,6 @@ void VisualEffects::clearToolPulse() {
 
 void VisualEffects::setProcessing(bool processing) {
     processingActive_ = processing;
-    processingUntilMs_ = processing ? millis() + 30000 : 0;
     lastFrameMs_ = 0;
 }
 
@@ -194,12 +192,6 @@ bool VisualEffects::update() {
     bool error = errorActive();
     if (errorVisible_ != error) {
         errorVisible_ = error;
-        dirty = true;
-    }
-
-    bool processing = processingVisible();
-    if (processingActive_ != processing) {
-        processingActive_ = processing;
         dirty = true;
     }
 
@@ -251,13 +243,9 @@ bool VisualEffects::errorActive() const {
     return timeActive(errorUntilMs_);
 }
 
-bool VisualEffects::processingVisible() const {
-    return processingActive_ && timeActive(processingUntilMs_);
-}
-
 bool VisualEffects::anyEffectActive() const {
     return voiceVisible_ || acceptedVisible_ || toolVisible_ || visionVisible_ || errorVisible_ ||
-           processingVisible();
+           processingActive_;
 }
 
 void VisualEffects::drawListeningBorder(LGFX_Sprite* canvas) const {

@@ -38,7 +38,6 @@ private:
     uint32_t toolUntilMs_;
     uint32_t visionUntilMs_;
     uint32_t errorUntilMs_;
-    uint32_t processingUntilMs_;
     uint32_t lastFrameMs_;
     bool voiceVisible_;
     bool acceptedVisible_;
@@ -54,7 +53,6 @@ private:
     bool toolActive() const;
     bool visionActive() const;
     bool errorActive() const;
-    bool processingVisible() const;
     bool anyEffectActive() const;
     void drawListeningBorder(LGFX_Sprite* canvas) const;
     void drawCircularListeningBorder(LGFX_Sprite* canvas) const;
