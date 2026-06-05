@@ -8,6 +8,42 @@
 
 namespace aiavatar {
 
+namespace {
+
+void copyTruncated(char* dest, size_t destSize, const char* src, size_t maxChars) {
+    if (!dest || destSize == 0) return;
+    strlcpy(dest, src ? src : "", destSize);
+    size_t len = strlen(dest);
+    if (len <= maxChars || maxChars + 1 > destSize) return;
+    if (maxChars >= 3) {
+        dest[maxChars - 3] = '.';
+        dest[maxChars - 2] = '.';
+        dest[maxChars - 1] = '.';
+        dest[maxChars] = '\0';
+    } else {
+        dest[maxChars] = '\0';
+    }
+}
+
+
+
+uint8_t byteToPercent(uint8_t value) {
+    return static_cast<uint8_t>((static_cast<uint16_t>(value) * 100 + 127) / 255);
+}
+
+uint8_t percentToByte(uint8_t percent) {
+    if (percent > 100) percent = 100;
+    return static_cast<uint8_t>((static_cast<uint16_t>(percent) * 255 + 50) / 100);
+}
+
+int clampPercent(int value) {
+    if (value < 0) return 0;
+    if (value > 100) return 100;
+    return value;
+}
+
+}  // namespace
+
 SystemUIController::SystemUIController()
     : avatar_(nullptr),
       config_(nullptr),
@@ -17,9 +53,17 @@ SystemUIController::SystemUIController()
       virtualButtonAreas_{{0, 190, 72, 50}, {124, 190, 72, 50}, {248, 190, 72, 50}},
       buttonActions_{ButtonAction::VolumeCycle, ButtonAction::None, ButtonAction::None},
       uiVisible_(true),
+      settingsOpen_(false),
       menuOpen_(false),
       menuClosePending_(false),
       selected_(0),
+      settingsSelected_(0),
+      settingsView_(SettingsView::Root),
+      wifiScrollOffset_(0),
+      settingsHoldActive_(false),
+      settingsHoldTarget_(HoldTarget::None),
+      settingsHoldDelta_(0),
+      settingsHoldNextMs_(0),
       menuAutoCloseMs_(0),
       touchActive_(false),
       touchHeld_(false),
@@ -55,6 +99,7 @@ void SystemUIController::update() {
     recordTouch(detail);
     if (avatar_->wasSleepWakeTriggered()) return;
     updateHold(detail);
+    if (updateSettingsHold(detail)) return;
     if (consumeSwipe(detail)) return;
 
     int16_t tapX = 0;
@@ -65,7 +110,18 @@ void SystemUIController::update() {
 }
 
 void SystemUIController::draw(LGFX_Sprite* canvas) const {
-    if (!canvas || !menuOpen_ || !config_) return;
+    if (!canvas || !config_) return;
+
+    if (settingsOpen_) {
+        drawSettings(canvas);
+    }
+    if (menuOpen_) {
+        drawNetworkMenu(canvas);
+    }
+}
+
+void SystemUIController::drawNetworkMenu(LGFX_Sprite* canvas) const {
+    if (!canvas || !config_) return;
 
     uint8_t itemCount = menuItemCount();
     if (itemCount == 0) return;
@@ -74,15 +130,16 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
     const int itemH = menuItemHeight_;
     const int paddingX = menuPaddingX_;
     const int paddingY = menuPaddingY_;
-    const int textH = 8 * menuTextSize_;
 
     canvas->fillRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, 0x1082);
     canvas->drawRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, 0x4208);
-    canvas->setTextSize(menuTextSize_);
+    canvas->setFont(&fonts::lgfxJapanGothic_12);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(top_left);
 
     for (uint8_t i = 0; i < itemCount; ++i) {
         int itemY = bounds.y + paddingY + i * itemH;
-        int textY = itemY + (itemH - textH) / 2;
+        int textY = itemY + (itemH - canvas->fontHeight()) / 2;
 
         if (i == selected_) {
             canvas->fillRoundRect(bounds.x + 4, itemY + 2, bounds.w - 8, itemH - 4, 4, 0x001F);
@@ -94,12 +151,12 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
         char label[72];
         char marker = '\0';
         if (i == 0) {
-            snprintf(label, sizeof(label), "WS: %s", avatar_->isConnected() ? "ON" : "OFF");
+            snprintf(label, sizeof(label), "WS: %s", avatar_->isConnected() ? "接続中" : "未接続");
         } else {
             uint8_t networkIndex = i - 1;
             const auto& network = config_->wifiNetworks[networkIndex];
             const char* displayName = network.name[0] ? network.name : network.ssid;
-            snprintf(label, sizeof(label), "WiFi: %s", displayName);
+            snprintf(label, sizeof(label), "Wi-Fi: %s", displayName);
             if (WiFi.status() == WL_CONNECTED && strcmp(WiFi.SSID().c_str(), network.ssid) == 0) {
                 marker = '*';
             }
@@ -111,6 +168,289 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
             canvas->setCursor(bounds.x + bounds.w - paddingX - 8, textY);
             canvas->print(marker);
         }
+    }
+}
+
+void SystemUIController::drawSettings(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    canvas->fillRect(0, 0, canvas->width(), canvas->height(), 0x0841);
+    drawSettingsHeader(canvas, settingsTitle());
+
+    switch (settingsView_) {
+        case SettingsView::Root:
+            drawSettingsRoot(canvas);
+            break;
+        case SettingsView::Brightness:
+            drawBrightnessSettings(canvas);
+            break;
+        case SettingsView::Speaker:
+            drawSpeakerSettings(canvas);
+            break;
+        case SettingsView::WiFi:
+            drawWifiSettings(canvas);
+            break;
+    }
+}
+
+void SystemUIController::drawSettingsHeader(LGFX_Sprite* canvas, const char* title) const {
+    const int displayW = canvas->width();
+    canvas->fillRect(0, 0, displayW, kSettingsHeaderHeight, TFT_BLACK);
+    canvas->drawFastHLine(0, kSettingsHeaderHeight - 1, displayW, 0x4208);
+
+    UiRect back = settingsBackBounds();
+    const int cx = back.x + back.w / 2;
+    const int cy = back.y + back.h / 2;
+    canvas->drawLine(cx + 11, cy - 13, cx - 10, cy, TFT_WHITE);
+    canvas->drawLine(cx - 10, cy, cx + 11, cy + 13, TFT_WHITE);
+    canvas->drawFastHLine(cx - 10, cy, 27, TFT_WHITE);
+    canvas->drawLine(cx + 11, cy - 12, cx - 9, cy, TFT_WHITE);
+    canvas->drawLine(cx - 9, cy, cx + 11, cy + 12, TFT_WHITE);
+
+    canvas->setFont(&fonts::lgfxJapanGothic_24);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(top_left);
+    canvas->setTextColor(TFT_WHITE);
+    int y = (kSettingsHeaderHeight - canvas->fontHeight()) / 2;
+    if (y < 0) y = 0;
+    canvas->drawString(title, kSettingsBackButtonWidth, y);
+}
+
+void SystemUIController::drawSettingsRoot(LGFX_Sprite* canvas) const {
+    for (uint8_t i = 0; i < settingsItemCount(); ++i) {
+        drawSettingsItem(canvas, i);
+    }
+}
+
+void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) const {
+    if (!canvas || !avatar_) return;
+    UiRect row = settingsItemBounds(index);
+    SettingsItem item = static_cast<SettingsItem>(index);
+
+    canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
+    canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
+                          row.w - kSettingsRowPaddingX * 2, 0x3186);
+
+    UiRect iconBounds{static_cast<int16_t>(row.x + kSettingsRowPaddingX),
+                      static_cast<int16_t>(row.y + (row.h - kSettingsIconSize) / 2),
+                      kSettingsIconSize,
+                      kSettingsIconSize};
+    drawSettingsIcon(canvas, item, iconBounds);
+
+    const char* label = "";
+    char value[48] = "";
+    bool navigates = true;
+    switch (item) {
+        case SettingsItem::Brightness: {
+            label = "ライト";
+            uint8_t pct = byteToPercent(avatar_->displayBrightness());
+            snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(pct));
+            break;
+        }
+        case SettingsItem::Mic:
+            label = "マイク";
+            snprintf(value, sizeof(value), "%s", avatar_->isMicMuted() ? "ミュート" : "オン");
+            navigates = false;
+            break;
+        case SettingsItem::Speaker: {
+            label = "スピーカー";
+            uint8_t pct = byteToPercent(avatar_->currentVolume());
+            snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(pct));
+            break;
+        }
+        case SettingsItem::WiFi:
+            label = "Wi-Fi";
+            if (WiFi.status() == WL_CONNECTED) {
+                String ssid = WiFi.SSID();
+                copyTruncated(value, sizeof(value), ssid.c_str(), 18);
+            } else {
+                snprintf(value, sizeof(value), "未接続");
+            }
+            break;
+        case SettingsItem::Count:
+        default:
+            break;
+    }
+
+    int labelX = row.x + kSettingsRowPaddingX + kSettingsIconSize + 12;
+    canvas->setFont(&fonts::lgfxJapanGothic_20);
+    canvas->setTextSize(1);
+    int labelY = row.y + (row.h - canvas->fontHeight()) / 2;
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextDatum(top_left);
+    canvas->drawString(label, labelX, labelY);
+
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextColor(0xC618);
+    int valueW = canvas->textWidth(value);
+    int valueX = row.x + row.w - kSettingsRowPaddingX - valueW - (navigates ? 18 : 0);
+    int valueY = row.y + (row.h - canvas->fontHeight()) / 2;
+    canvas->drawString(value, valueX, valueY);
+
+    if (navigates) {
+        int cy = row.y + row.h / 2;
+        int x = row.x + row.w - kSettingsRowPaddingX - 9;
+        canvas->drawLine(x - 4, cy - 7, x + 4, cy, 0xC618);
+        canvas->drawLine(x + 4, cy, x - 4, cy + 7, 0xC618);
+    }
+}
+
+void SystemUIController::drawBrightnessSettings(LGFX_Sprite* canvas) const {
+    drawStepper(canvas, byteToPercent(avatar_->displayBrightness()), 0, 100, "%");
+}
+
+void SystemUIController::drawSpeakerSettings(LGFX_Sprite* canvas) const {
+    drawStepper(canvas, byteToPercent(avatar_->currentVolume()), 0, 100, "%");
+}
+
+void SystemUIController::drawWifiSettings(LGFX_Sprite* canvas) const {
+    if (!canvas || !config_) return;
+
+    uint8_t total = wifiItemCount();
+    if (total == 0) {
+        const char* message = "Wi-Fi設定がありません";
+        canvas->setFont(&fonts::lgfxJapanGothic_20);
+        canvas->setTextSize(1);
+        canvas->setTextColor(0xC618);
+        canvas->setTextDatum(top_center);
+        canvas->drawString(message, canvas->width() / 2, kSettingsHeaderHeight + 56);
+        return;
+    }
+
+    uint8_t visibleRows = visibleWifiRows();
+    for (uint8_t visible = 0; visible < visibleRows; ++visible) {
+        uint8_t index = wifiScrollOffset_ + visible;
+        if (index >= total) break;
+        const auto& network = config_->wifiNetworks[index];
+        UiRect row = wifiItemBounds(visible);
+        bool active = WiFi.status() == WL_CONNECTED && strcmp(WiFi.SSID().c_str(), network.ssid) == 0;
+
+        canvas->fillRect(row.x, row.y, row.w, row.h, active ? 0x1024 : 0x0841);
+        canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
+                              row.w - kSettingsRowPaddingX * 2, 0x3186);
+
+        const char* displayName = network.name[0] ? network.name : network.ssid;
+        char name[64];
+        copyTruncated(name, sizeof(name), displayName, 20);
+        canvas->setFont(&fonts::lgfxJapanGothic_16);
+        canvas->setTextSize(1);
+        canvas->setTextDatum(top_left);
+        canvas->setTextColor(TFT_WHITE);
+        int nameY = row.y + (row.h - canvas->fontHeight()) / 2;
+        canvas->drawString(name, row.x + kSettingsRowPaddingX, nameY);
+
+        if (active) {
+            const char* status = "接続中";
+            canvas->setFont(&fonts::lgfxJapanGothic_16);
+            canvas->setTextColor(TFT_GREEN);
+            int statusW = canvas->textWidth(status);
+            int statusY = row.y + (row.h - canvas->fontHeight()) / 2;
+            canvas->drawString(status, row.x + row.w - kSettingsRowPaddingX - statusW, statusY);
+        }
+    }
+
+    if (total > visibleRows) {
+        int indicatorX = canvas->width() - 5;
+        int trackY = kSettingsHeaderHeight + 8;
+        int trackH = canvas->height() - kSettingsHeaderHeight - 16;
+        canvas->drawFastVLine(indicatorX, trackY, trackH, 0x4208);
+        int thumbH = trackH * visibleRows / total;
+        if (thumbH < 12) thumbH = 12;
+        int maxOffset = total - visibleRows;
+        int thumbY = trackY;
+        if (maxOffset > 0) thumbY += (trackH - thumbH) * wifiScrollOffset_ / maxOffset;
+        canvas->fillRoundRect(indicatorX - 2, thumbY, 4, thumbH, 2, 0xC618);
+    }
+}
+
+void SystemUIController::drawStepper(LGFX_Sprite* canvas, int value, int minValue, int maxValue,
+                                     const char* unit) const {
+    if (!canvas) return;
+
+    char valueText[32];
+    snprintf(valueText, sizeof(valueText), "%d%s", value, unit ? unit : "");
+
+    canvas->setFont(&fonts::lgfxJapanGothic_36);
+    canvas->setTextSize(1);
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextDatum(top_center);
+    int valueY = kSettingsHeaderHeight + 34;
+    canvas->drawString(valueText, canvas->width() / 2, valueY);
+
+    char rangeText[32];
+    snprintf(rangeText, sizeof(rangeText), "%d - %d", minValue, maxValue);
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextColor(0xC618);
+    canvas->drawString(rangeText, canvas->width() / 2, valueY + 48);
+
+    drawAdjustButton(canvas, decrementButtonBounds(), '-');
+    drawAdjustButton(canvas, incrementButtonBounds(), '+');
+}
+
+void SystemUIController::drawAdjustButton(LGFX_Sprite* canvas, UiRect bounds, char symbol) const {
+    const uint16_t fill = 0x2104;
+    const uint16_t outline = 0x8410;
+    canvas->fillRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, fill);
+    canvas->drawRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, outline);
+    canvas->setFont(&fonts::Font4);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(middle_center);
+    canvas->setTextColor(TFT_WHITE);
+    char text[2] = {symbol, '\0'};
+    canvas->drawString(text, bounds.x + bounds.w / 2, bounds.y + bounds.h / 2);
+}
+
+void SystemUIController::drawSettingsIcon(LGFX_Sprite* canvas, SettingsItem item,
+                                          UiRect bounds) const {
+    if (!canvas) return;
+    const int x = bounds.x;
+    const int y = bounds.y;
+    const int s = bounds.w;
+    const int cx = x + s / 2;
+    const int cy = y + s / 2;
+    const uint16_t color = TFT_WHITE;
+
+    switch (item) {
+        case SettingsItem::Brightness:
+            canvas->drawCircle(cx, cy, s / 5, color);
+            canvas->fillCircle(cx, cy, s / 8, TFT_YELLOW);
+            canvas->drawFastHLine(x, cy, s / 4, color);
+            canvas->drawFastHLine(cx + s / 4, cy, s / 4, color);
+            canvas->drawFastVLine(cx, y, s / 4, color);
+            canvas->drawFastVLine(cx, cy + s / 4, s / 4, color);
+            canvas->drawLine(x + 4, y + 4, x + 8, y + 8, color);
+            canvas->drawLine(x + s - 5, y + 4, x + s - 9, y + 8, color);
+            canvas->drawLine(x + 4, y + s - 5, x + 8, y + s - 9, color);
+            canvas->drawLine(x + s - 5, y + s - 5, x + s - 9, y + s - 9, color);
+            break;
+        case SettingsItem::Mic:
+            canvas->fillRoundRect(cx - 3, y + 3, 6, 13, 3, color);
+            canvas->drawRoundRect(cx - 7, y + 9, 14, 10, 4, color);
+            canvas->drawFastVLine(cx, y + 18, 4, color);
+            canvas->drawFastHLine(cx - 5, y + 22, 10, color);
+            break;
+        case SettingsItem::Speaker:
+            canvas->fillRect(x + 2, y + 9, 5, 8, color);
+            canvas->fillTriangle(x + 7, y + 9, x + 14, y + 4, x + 14, y + 20, color);
+            canvas->drawLine(x + 17, y + 8, x + 20, cy, color);
+            canvas->drawLine(x + 20, cy, x + 17, y + 16, color);
+            canvas->drawLine(x + 20, y + 5, x + 23, cy, color);
+            canvas->drawLine(x + 23, cy, x + 20, y + 19, color);
+            break;
+        case SettingsItem::WiFi:
+            canvas->drawLine(cx - 10, y + 9, cx - 6, y + 6, color);
+            canvas->drawLine(cx - 6, y + 6, cx, y + 5, color);
+            canvas->drawLine(cx, y + 5, cx + 6, y + 6, color);
+            canvas->drawLine(cx + 6, y + 6, cx + 10, y + 9, color);
+            canvas->drawLine(cx - 6, y + 13, cx - 3, y + 11, color);
+            canvas->drawLine(cx - 3, y + 11, cx, y + 10, color);
+            canvas->drawLine(cx, y + 10, cx + 3, y + 11, color);
+            canvas->drawLine(cx + 3, y + 11, cx + 6, y + 13, color);
+            canvas->fillCircle(cx, y + 18, 2, color);
+            break;
+        case SettingsItem::Count:
+        default:
+            break;
     }
 }
 
@@ -158,6 +498,11 @@ void SystemUIController::runButtonAction(ButtonId id) {
 }
 
 void SystemUIController::handleTap(int16_t x, int16_t y) {
+    if (settingsOpen_) {
+        handleSettingsTap(x, y);
+        return;
+    }
+
     if (!uiVisible_) return;
 
     if (menuOpen_) {
@@ -194,7 +539,7 @@ bool SystemUIController::handleVirtualButtonTap(int16_t x, int16_t y) {
 }
 
 void SystemUIController::updateHold(const m5::touch_detail_t& detail) {
-    if (menuOpen_) return;
+    if (menuOpen_ || settingsOpen_) return;
 
     if (touchActive_ && !touchHeld_ && detail.isPressed()) {
         if (millis() - touchStartMs_ >= config_->pttHoldThresholdMs &&
@@ -209,6 +554,47 @@ void SystemUIController::updateHold(const m5::touch_detail_t& detail) {
         touchHeld_ = false;
         touchActive_ = false;
     }
+}
+
+bool SystemUIController::updateSettingsHold(const m5::touch_detail_t& detail) {
+    if (!settingsOpen_ || !avatar_) return false;
+    if (settingsView_ != SettingsView::Brightness && settingsView_ != SettingsView::Speaker) {
+        settingsHoldActive_ = false;
+        settingsHoldTarget_ = HoldTarget::None;
+        return false;
+    }
+
+    if (detail.wasReleased()) {
+        if (!settingsHoldActive_) return false;
+        settingsHoldActive_ = false;
+        settingsHoldTarget_ = HoldTarget::None;
+        settingsHoldDelta_ = 0;
+        touchHeld_ = false;
+        touchActive_ = false;
+        return true;
+    }
+
+    if (!detail.isPressed()) return false;
+
+    if (!settingsHoldActive_) {
+        if (millis() - touchStartMs_ < kSettingsHoldStartMs) return false;
+        if (touchMovedBeyondTapThreshold()) return false;
+        int8_t delta = 0;
+        HoldTarget target = holdTargetAt(touchStartX_, touchStartY_, delta);
+        if (target == HoldTarget::None) return false;
+        settingsHoldActive_ = true;
+        settingsHoldTarget_ = target;
+        settingsHoldDelta_ = delta;
+        settingsHoldNextMs_ = 0;
+        touchHeld_ = true;
+    }
+
+    uint32_t now = millis();
+    if (settingsHoldNextMs_ == 0 || static_cast<int32_t>(now - settingsHoldNextMs_) >= 0) {
+        adjustHoldTarget(settingsHoldTarget_, settingsHoldDelta_);
+        settingsHoldNextMs_ = now + kSettingsHoldRepeatMs;
+    }
+    return true;
 }
 
 bool SystemUIController::hasPushToTalkButton() const {
@@ -247,6 +633,31 @@ void SystemUIController::closeMenu() {
     avatar_->display().setDirty();
 }
 
+void SystemUIController::openSettings() {
+    if (!uiVisible_) return;
+
+    settingsOpen_ = true;
+    settingsView_ = SettingsView::Root;
+    menuOpen_ = false;
+    menuClosePending_ = false;
+    settingsSelected_ = 0;
+    settingsHoldActive_ = false;
+    settingsHoldTarget_ = HoldTarget::None;
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::closeSettings() {
+    if (!settingsOpen_) return;
+
+    settingsOpen_ = false;
+    settingsView_ = SettingsView::Root;
+    menuOpen_ = false;
+    menuClosePending_ = false;
+    settingsHoldActive_ = false;
+    settingsHoldTarget_ = HoldTarget::None;
+    avatar_->display().setDirty();
+}
+
 void SystemUIController::recordTouch(const m5::touch_detail_t& detail) {
     if (detail.wasPressed()) {
         avatar_->resetSleepTimer("touch");
@@ -257,6 +668,8 @@ void SystemUIController::recordTouch(const m5::touch_detail_t& detail) {
         touchStartY_ = detail.y;
         touchLastX_ = detail.x;
         touchLastY_ = detail.y;
+        settingsHoldActive_ = false;
+        settingsHoldTarget_ = HoldTarget::None;
         return;
     }
 
@@ -278,25 +691,44 @@ bool SystemUIController::consumeSwipe(const m5::touch_detail_t& detail) {
 
     int16_t dx = touchLastX_ - touchStartX_;
     int16_t dy = touchLastY_ - touchStartY_;
-    bool vertical = abs(dx) <= kSwipeMaxHorizontal;
-    bool hideGesture = uiVisible_ && vertical && dy <= -kSwipeThreshold;
-    bool revealGesture = !uiVisible_ && touchStartY_ <= kEdgeRevealHeight &&
-                         vertical && dy >= kSwipeThreshold;
+    bool horizontal = abs(dy) <= kSwipeMaxVertical && abs(dx) > abs(dy);
 
-    if (!hideGesture && !revealGesture) return false;
+    if (settingsOpen_) {
+        if (horizontal && dx >= kSwipeThreshold) {
+            touchActive_ = false;
+            handleSettingsBack();
+            return true;
+        }
+        bool vertical = settingsView_ == SettingsView::WiFi && abs(dx) <= kSwipeMaxHorizontal &&
+                        abs(dy) >= kSwipeThreshold;
+        if (vertical) {
+            touchActive_ = false;
+            scrollWifi(dy < 0 ? 1 : -1);
+            return true;
+        }
+        return false;
+    }
 
-    touchActive_ = false;
-    setUiVisible(revealGesture);
-    return true;
+    if (!menuOpen_ && uiVisible_ && horizontal && dx <= -kSwipeThreshold) {
+        touchActive_ = false;
+        openSettings();
+        return true;
+    }
+
+    return false;
 }
 
 void SystemUIController::setUiVisible(bool visible) {
     if (uiVisible_ == visible) return;
 
     uiVisible_ = visible;
-    if (!uiVisible_ && menuOpen_) {
-        menuOpen_ = false;
-        menuClosePending_ = false;
+    if (!uiVisible_) {
+        if (menuOpen_) {
+            menuOpen_ = false;
+            menuClosePending_ = false;
+        }
+        settingsOpen_ = false;
+        settingsView_ = SettingsView::Root;
     }
     avatar_->display().setDirty();
 }
@@ -317,6 +749,60 @@ void SystemUIController::handleMenuTap(int16_t x, int16_t y) {
     runMenuAction(selected_);
 }
 
+void SystemUIController::handleSettingsTap(int16_t x, int16_t y) {
+    if (settingsBackBounds().contains(x, y)) {
+        handleSettingsBack();
+        return;
+    }
+
+    switch (settingsView_) {
+        case SettingsView::Root:
+            handleSettingsRootTap(x, y);
+            break;
+        case SettingsView::Brightness:
+            handleBrightnessTap(x, y);
+            break;
+        case SettingsView::Speaker:
+            handleSpeakerTap(x, y);
+            break;
+        case SettingsView::WiFi:
+            handleWifiTap(x, y);
+            break;
+    }
+}
+
+void SystemUIController::handleSettingsRootTap(int16_t x, int16_t y) {
+    int8_t index = settingsIndexAt(x, y);
+    if (index < 0) return;
+
+    settingsSelected_ = static_cast<uint8_t>(index);
+    runSettingsAction(settingsSelected_);
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::handleBrightnessTap(int16_t x, int16_t y) {
+    if (decrementButtonBounds().contains(x, y)) {
+        adjustBrightness(-1);
+    } else if (incrementButtonBounds().contains(x, y)) {
+        adjustBrightness(1);
+    }
+}
+
+void SystemUIController::handleSpeakerTap(int16_t x, int16_t y) {
+    if (decrementButtonBounds().contains(x, y)) {
+        adjustSpeakerVolume(-1);
+    } else if (incrementButtonBounds().contains(x, y)) {
+        adjustSpeakerVolume(1);
+    }
+}
+
+void SystemUIController::handleWifiTap(int16_t x, int16_t y) {
+    int8_t index = wifiIndexAt(x, y);
+    if (index < 0) return;
+    avatar_->switchWiFi(static_cast<uint8_t>(index));
+    avatar_->display().setDirty();
+}
+
 void SystemUIController::runMenuAction(uint8_t index) {
     if (!avatar_) return;
 
@@ -330,6 +816,95 @@ void SystemUIController::runMenuAction(uint8_t index) {
     }
 
     avatar_->switchWiFi(index - 1);
+}
+
+void SystemUIController::runSettingsAction(uint8_t index) {
+    if (!avatar_) return;
+
+    switch (static_cast<SettingsItem>(index)) {
+        case SettingsItem::Brightness:
+            settingsView_ = SettingsView::Brightness;
+            break;
+        case SettingsItem::Mic:
+            avatar_->toggleMicMuted();
+            break;
+        case SettingsItem::Speaker:
+            settingsView_ = SettingsView::Speaker;
+            break;
+        case SettingsItem::WiFi:
+            settingsView_ = SettingsView::WiFi;
+            wifiScrollOffset_ = 0;
+            break;
+        case SettingsItem::Count:
+        default:
+            break;
+    }
+}
+
+void SystemUIController::handleSettingsBack() {
+    if (settingsView_ == SettingsView::Root) {
+        closeSettings();
+        return;
+    }
+    settingsView_ = SettingsView::Root;
+    settingsHoldActive_ = false;
+    settingsHoldTarget_ = HoldTarget::None;
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::adjustBrightness(int8_t delta) {
+    int pct = clampPercent(byteToPercent(avatar_->displayBrightness()) + delta);
+    avatar_->setDisplayBrightness(percentToByte(static_cast<uint8_t>(pct)));
+}
+
+void SystemUIController::adjustSpeakerVolume(int8_t delta) {
+    int pct = clampPercent(byteToPercent(avatar_->currentVolume()) + delta);
+    avatar_->setVolume(percentToByte(static_cast<uint8_t>(pct)));
+}
+
+void SystemUIController::adjustHoldTarget(HoldTarget target, int8_t delta) {
+    switch (target) {
+        case HoldTarget::Brightness:
+            adjustBrightness(delta);
+            break;
+        case HoldTarget::Speaker:
+            adjustSpeakerVolume(delta);
+            break;
+        case HoldTarget::None:
+        default:
+            break;
+    }
+}
+
+SystemUIController::HoldTarget SystemUIController::holdTargetAt(int16_t x, int16_t y,
+                                                                int8_t& delta) const {
+    if (decrementButtonBounds().contains(x, y)) {
+        delta = -1;
+    } else if (incrementButtonBounds().contains(x, y)) {
+        delta = 1;
+    } else {
+        delta = 0;
+        return HoldTarget::None;
+    }
+
+    if (settingsView_ == SettingsView::Brightness) return HoldTarget::Brightness;
+    if (settingsView_ == SettingsView::Speaker) return HoldTarget::Speaker;
+    delta = 0;
+    return HoldTarget::None;
+}
+
+UiRect SystemUIController::decrementButtonBounds() const {
+    int displayH = M5.Display.height();
+    int y = displayH - kSettingsStepperButtonSize - 24;
+    return {30, static_cast<int16_t>(y), kSettingsStepperButtonSize, kSettingsStepperButtonSize};
+}
+
+UiRect SystemUIController::incrementButtonBounds() const {
+    int displayW = M5.Display.width();
+    int displayH = M5.Display.height();
+    int y = displayH - kSettingsStepperButtonSize - 24;
+    return {static_cast<int16_t>(displayW - 30 - kSettingsStepperButtonSize),
+            static_cast<int16_t>(y), kSettingsStepperButtonSize, kSettingsStepperButtonSize};
 }
 
 uint8_t SystemUIController::menuItemCount() const {
@@ -363,6 +938,80 @@ int8_t SystemUIController::menuIndexAt(int16_t x, int16_t y) const {
     uint8_t index = localY / itemH;
     if (index >= menuItemCount()) return -1;
     return static_cast<int8_t>(index);
+}
+
+uint8_t SystemUIController::settingsItemCount() const {
+    return static_cast<uint8_t>(SettingsItem::Count);
+}
+
+UiRect SystemUIController::settingsBackBounds() const {
+    return {0, 0, kSettingsBackButtonWidth, kSettingsHeaderHeight};
+}
+
+UiRect SystemUIController::settingsItemBounds(uint8_t index) const {
+    int displayW = M5.Display.width();
+    int y = kSettingsHeaderHeight + index * kSettingsRowHeight;
+    return {0, static_cast<int16_t>(y), static_cast<int16_t>(displayW), kSettingsRowHeight};
+}
+
+int8_t SystemUIController::settingsIndexAt(int16_t x, int16_t y) const {
+    (void)x;
+    if (y < kSettingsHeaderHeight) return -1;
+    uint8_t index = (y - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (index >= settingsItemCount()) return -1;
+    return static_cast<int8_t>(index);
+}
+
+uint8_t SystemUIController::visibleWifiRows() const {
+    int rows = (M5.Display.height() - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (rows < 1) return 1;
+    return static_cast<uint8_t>(rows);
+}
+
+uint8_t SystemUIController::wifiItemCount() const {
+    return config_ ? config_->wifiNetworkCount : 0;
+}
+
+UiRect SystemUIController::wifiItemBounds(uint8_t visibleIndex) const {
+    int displayW = M5.Display.width();
+    int y = kSettingsHeaderHeight + visibleIndex * kSettingsRowHeight;
+    return {0, static_cast<int16_t>(y), static_cast<int16_t>(displayW), kSettingsRowHeight};
+}
+
+int8_t SystemUIController::wifiIndexAt(int16_t x, int16_t y) const {
+    (void)x;
+    if (y < kSettingsHeaderHeight) return -1;
+    uint8_t visibleIndex = (y - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (visibleIndex >= visibleWifiRows()) return -1;
+    uint8_t index = wifiScrollOffset_ + visibleIndex;
+    if (index >= wifiItemCount()) return -1;
+    return static_cast<int8_t>(index);
+}
+
+void SystemUIController::scrollWifi(int8_t delta) {
+    uint8_t total = wifiItemCount();
+    uint8_t visible = visibleWifiRows();
+    int maxOffset = total > visible ? total - visible : 0;
+    int offset = wifiScrollOffset_ + delta;
+    if (offset < 0) offset = 0;
+    if (offset > maxOffset) offset = maxOffset;
+    if (wifiScrollOffset_ == offset) return;
+    wifiScrollOffset_ = offset;
+    avatar_->display().setDirty();
+}
+
+const char* SystemUIController::settingsTitle() const {
+    switch (settingsView_) {
+        case SettingsView::Root:
+            return "設定";
+        case SettingsView::Brightness:
+            return "ライト";
+        case SettingsView::Speaker:
+            return "スピーカー";
+        case SettingsView::WiFi:
+            return "Wi-Fi";
+    }
+    return "設定";
 }
 
 bool SystemUIController::consumeTap(const m5::touch_detail_t& detail, int16_t& x, int16_t& y) {

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <cmath>
 #include <cstring>
@@ -9,6 +10,18 @@
 #include "mbedtls/base64.h"
 
 namespace aiavatar {
+
+namespace {
+
+constexpr const char* kSettingsPrefsNamespace = "aiavatar";
+constexpr const char* kPrefsDisplayBrightnessKey = "disp_brt";
+constexpr const char* kPrefsSpeakerVolumeKey = "spk_vol";
+constexpr const char* kPrefsMicMutedKey = "mic_mute";
+constexpr const char* kPrefsWifiIndexKey = "wifi_idx";
+constexpr uint8_t kNoWifiNetworkIndex = 0xff;
+constexpr uint32_t kSettingsSaveDebounceMs = 700;
+
+}  // namespace
 
 AIAvatar* AIAvatar::s_instance = nullptr;
 
@@ -34,6 +47,11 @@ AIAvatar::AIAvatar()
       volume_(200),
       volumeLevelIndex_(0),
       volumeOverlayUntilMs_(0),
+      brightnessSettingDirty_(false),
+      volumeSettingDirty_(false),
+      micSettingDirty_(false),
+      wifiSettingDirty_(false),
+      settingsSaveDueMs_(0),
       batteryLevel_(-1),
       batteryCharging_(false),
       lastBatteryCheckMs_(0),
@@ -42,6 +60,7 @@ AIAvatar::AIAvatar()
       wifiConnectedLogged_(false),
       timeConfigured_(false),
       pendingWifiIndex_(0),
+      activeWifiNetworkIndex_(kNoWifiNetworkIndex),
       wifiSwitchStartMs_(0),
       pttBuf_(nullptr),
       pttBufCapacity_(0),
@@ -90,8 +109,9 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     s_instance = this;
     defaultResources_ = resources;
     config_ = config;
+    loadPersistedSettings();
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
-    volume_ = config_.volumeLevels[volumeLevelIndex_];
+    volume_ = config_.speakerVolume;
     speaker_.setAutoNormalize(config_.audioNormalizeTargetPeak,
                               config_.audioNormalizeMaxGain);
     setenv("TZ", config_.timezone, 1);
@@ -288,6 +308,7 @@ void AIAvatar::update() {
     }
     updateWiFi();
     systemUI_.update();
+    updatePersistedSettings();
     if (config_.fastStartup && deferredStartupStage_ >= 7) {
         face_.setDeferredLoadingEnabled(canRunHeavyDeferredWork());
     }
@@ -435,10 +456,12 @@ void AIAvatar::beginDeferredOpenClaw() {
 void AIAvatar::setVolume(uint8_t volume) {
     resetSleepTimer("volume");
     volumeLevelIndex_ = nearestVolumeLevel(volume);
-    volume_ = config_.volumeLevels[volumeLevelIndex_];
+    volume_ = volume;
+    config_.speakerVolume = volume;
     volumeOverlayUntilMs_ = millis() + 2000;
     speaker_.setVolume(volume_);
     display_.setDirty();
+    queueSettingsSave(false, true, false, false);
 }
 
 void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
@@ -447,21 +470,33 @@ void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
     if (levelIndex >= config_.volumeLevelCount) levelIndex = config_.volumeLevelCount - 1;
     volumeLevelIndex_ = levelIndex;
     volume_ = config_.volumeLevels[volumeLevelIndex_];
+    config_.speakerVolume = volume_;
     volumeOverlayUntilMs_ = millis() + 2000;
     speaker_.setVolume(volume_);
     display_.setDirty();
+    queueSettingsSave(false, true, false, false);
+}
+
+void AIAvatar::setDisplayBrightness(uint8_t brightness) {
+    resetSleepTimer("brightness");
+    config_.displayBrightness = brightness;
+    M5.Display.setBrightness(brightness);
+    display_.setDirty();
+    queueSettingsSave(true, false, false, false);
 }
 
 void AIAvatar::setMicMuted(bool muted) {
     resetSleepTimer("mic mute");
     micMuted_ = muted;
     display_.setDirty();
+    queueSettingsSave(false, false, true, false);
 }
 
 void AIAvatar::toggleMicMuted() {
     resetSleepTimer("mic mute");
     micMuted_ = !micMuted_;
     display_.setDirty();
+    queueSettingsSave(false, false, true, false);
 }
 
 void AIAvatar::cycleVolume() {
@@ -894,6 +929,8 @@ void AIAvatar::updateWifiSwitch() {
         strlcpy(config_.wifiSsid, network.ssid, sizeof(config_.wifiSsid));
         strlcpy(config_.wifiPass, network.pass, sizeof(config_.wifiPass));
         wifiSwitching_ = false;
+        activeWifiNetworkIndex_ = pendingWifiIndex_;
+        queueSettingsSave(false, false, false, true);
         wsConnectPending_ = true;
         wifiConnectedLogged_ = true;
         Serial.printf("[AIAvatar] WiFi connected to %s ip=%s\n",
@@ -1030,6 +1067,105 @@ void AIAvatar::logMemoryUsage(const char* label) const {
                   static_cast<unsigned>(psramFree / 1024),
                   static_cast<unsigned>(psramMinFree / 1024),
                   static_cast<unsigned>(psramLargest / 1024));
+}
+
+
+void AIAvatar::loadPersistedSettings() {
+    activeWifiNetworkIndex_ = findConfiguredWifiNetworkIndex();
+
+    Preferences prefs;
+    if (!prefs.begin(kSettingsPrefsNamespace, true)) {
+        Serial.println("[Settings] NVS unavailable; using config values");
+        return;
+    }
+
+    bool restored = false;
+    if (prefs.isKey(kPrefsDisplayBrightnessKey)) {
+        config_.displayBrightness = prefs.getUChar(kPrefsDisplayBrightnessKey,
+                                                   config_.displayBrightness);
+        restored = true;
+    }
+    if (prefs.isKey(kPrefsSpeakerVolumeKey)) {
+        config_.speakerVolume = prefs.getUChar(kPrefsSpeakerVolumeKey,
+                                               config_.speakerVolume);
+        restored = true;
+    }
+    if (prefs.isKey(kPrefsMicMutedKey)) {
+        micMuted_ = prefs.getBool(kPrefsMicMutedKey, micMuted_);
+        restored = true;
+    }
+    if (prefs.isKey(kPrefsWifiIndexKey)) {
+        uint8_t index = prefs.getUChar(kPrefsWifiIndexKey, kNoWifiNetworkIndex);
+        if (index < config_.wifiNetworkCount && config_.wifiNetworks[index].ssid[0]) {
+            const auto& network = config_.wifiNetworks[index];
+            strlcpy(config_.wifiSsid, network.ssid, sizeof(config_.wifiSsid));
+            strlcpy(config_.wifiPass, network.pass, sizeof(config_.wifiPass));
+            activeWifiNetworkIndex_ = index;
+            restored = true;
+        } else if (index != kNoWifiNetworkIndex) {
+            Serial.printf("[Settings] ignored invalid WiFi index from NVS: %u\n", index);
+        }
+    }
+    prefs.end();
+
+    if (restored) {
+        Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s wifi=%u\n",
+                      config_.displayBrightness, config_.speakerVolume,
+                      micMuted_ ? "muted" : "on", activeWifiNetworkIndex_);
+    }
+}
+
+void AIAvatar::queueSettingsSave(bool brightness, bool volume, bool mic, bool wifi) {
+    if (!brightness && !volume && !mic && !wifi) return;
+    brightnessSettingDirty_ = brightnessSettingDirty_ || brightness;
+    volumeSettingDirty_ = volumeSettingDirty_ || volume;
+    micSettingDirty_ = micSettingDirty_ || mic;
+    wifiSettingDirty_ = wifiSettingDirty_ || wifi;
+    settingsSaveDueMs_ = millis() + kSettingsSaveDebounceMs;
+}
+
+void AIAvatar::updatePersistedSettings() {
+    if (!brightnessSettingDirty_ && !volumeSettingDirty_ && !micSettingDirty_ &&
+        !wifiSettingDirty_) {
+        return;
+    }
+    if (static_cast<int32_t>(millis() - settingsSaveDueMs_) < 0) return;
+
+    Preferences prefs;
+    if (!prefs.begin(kSettingsPrefsNamespace, false)) {
+        Serial.println("[Settings] NVS open failed; retry later");
+        settingsSaveDueMs_ = millis() + 5000;
+        return;
+    }
+
+    if (brightnessSettingDirty_) {
+        prefs.putUChar(kPrefsDisplayBrightnessKey, config_.displayBrightness);
+    }
+    if (volumeSettingDirty_) {
+        prefs.putUChar(kPrefsSpeakerVolumeKey, volume_);
+    }
+    if (micSettingDirty_) {
+        prefs.putBool(kPrefsMicMutedKey, micMuted_);
+    }
+    if (wifiSettingDirty_ && activeWifiNetworkIndex_ != kNoWifiNetworkIndex) {
+        prefs.putUChar(kPrefsWifiIndexKey, activeWifiNetworkIndex_);
+    }
+    prefs.end();
+
+    brightnessSettingDirty_ = false;
+    volumeSettingDirty_ = false;
+    micSettingDirty_ = false;
+    wifiSettingDirty_ = false;
+    settingsSaveDueMs_ = 0;
+    Serial.println("[Settings] NVS saved");
+}
+
+uint8_t AIAvatar::findConfiguredWifiNetworkIndex() const {
+    if (config_.wifiSsid[0] == '\0') return kNoWifiNetworkIndex;
+    for (uint8_t i = 0; i < config_.wifiNetworkCount; ++i) {
+        if (strcmp(config_.wifiNetworks[i].ssid, config_.wifiSsid) == 0) return i;
+    }
+    return kNoWifiNetworkIndex;
 }
 
 bool AIAvatar::hasSpeech(const int16_t* samples, size_t sampleCount) const {

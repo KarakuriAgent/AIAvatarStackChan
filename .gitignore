@@ -38,6 +38,13 @@
 
 examples/stackchan/kuroha
 .venv
+.venv-platformio/
+
+# Local device/private assets. These may contain Wi-Fi credentials or server URLs.
+sdcard/
+private/
+examples/stackchan/basic/src/BuiltinFirmwareAssets.cpp
+examples/stackchan/basic/src/BuiltinFirmwareAssets.h
 
 __pycache__
 recorded_voices

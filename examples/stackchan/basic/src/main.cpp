@@ -3,6 +3,13 @@
 
 #include "AIAvatarStackChan.h"
 
+#if __has_include("BuiltinFirmwareAssets.h")
+#include "BuiltinFirmwareAssets.h"
+#define AIAVATAR_HAS_BUILTIN_FIRMWARE_ASSETS 1
+#else
+#define AIAVATAR_HAS_BUILTIN_FIRMWARE_ASSETS 0
+#endif
+
 static aiavatar::Config config;
 static aiavatar::ResourceProvider resources;
 static aiavatar::AIAvatar avatar;
@@ -22,11 +29,22 @@ void setup() {
     Serial.println("[Main] M5 initialized");
     Serial.printf("[Main] heap=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreePsram());
 
+#if AIAVATAR_HAS_BUILTIN_FIRMWARE_ASSETS
+    resources.setBuiltinAssets(aiavatar::kBuiltinFirmwareAssets,
+                               aiavatar::kBuiltinFirmwareAssetsCount);
+    Serial.println("[Main] built-in firmware assets registered");
+#endif
+
     if (resources.beginSD(GPIO_NUM_4)) {
         Serial.println("[Main] SD mounted");
-        resources.loadConfig(config);
     } else {
-        Serial.println("[Main] SD not available; using built-in defaults");
+        Serial.println("[Main] SD not available");
+    }
+
+    if (resources.loadConfig(config)) {
+        Serial.println("[Main] config loaded");
+    } else {
+        Serial.println("[Main] config not found; using built-in defaults");
     }
 
     if (config.wsHost[0] == '\0') {

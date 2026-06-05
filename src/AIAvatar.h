@@ -37,6 +37,7 @@ public:
     void update();
     void setVolume(uint8_t volume);
     void setVolumeLevel(uint8_t levelIndex);
+    void setDisplayBrightness(uint8_t brightness);
     void setMicMuted(bool muted);
     void toggleMicMuted();
     void cycleVolume();
@@ -74,6 +75,10 @@ public:
     bool isWifiOffForSleep() const { return sleepManager_.isWifiOff(); }
     bool wasSleepWakeTriggered() const { return sleepManager_.wakeActivityTriggered(); }
     uint8_t currentDisplayBrightness() const { return sleepManager_.currentDisplayBrightness(); }
+    uint8_t displayBrightness() const { return config_.displayBrightness; }
+    uint8_t currentVolumeLevel() const { return volumeLevelIndex_; }
+    uint8_t volumeLevelCount() const { return config_.volumeLevelCount; }
+    uint8_t currentVolume() const { return volume_; }
     bool isStartupComplete() const {
         return !config_.fastStartup ||
                (deferredStartupStage_ >= 7 && face_.deferredLoadingComplete());
@@ -132,6 +137,11 @@ private:
     uint8_t volume_;
     uint8_t volumeLevelIndex_;
     uint32_t volumeOverlayUntilMs_;
+    bool brightnessSettingDirty_;
+    bool volumeSettingDirty_;
+    bool micSettingDirty_;
+    bool wifiSettingDirty_;
+    uint32_t settingsSaveDueMs_;
     int8_t batteryLevel_;
     bool batteryCharging_;
     uint32_t lastBatteryCheckMs_;
@@ -140,6 +150,7 @@ private:
     bool wifiConnectedLogged_;
     bool timeConfigured_;
     uint8_t pendingWifiIndex_;
+    uint8_t activeWifiNetworkIndex_;
     uint32_t wifiSwitchStartMs_;
     int16_t* pttBuf_;
     size_t pttBufCapacity_;
@@ -192,6 +203,10 @@ private:
     void updateVisionPreview();
     void drawVisionPreview(LGFX_Sprite* canvas);
     void logMemoryUsage(const char* label) const;
+    void loadPersistedSettings();
+    void queueSettingsSave(bool brightness, bool volume, bool mic, bool wifi);
+    void updatePersistedSettings();
+    uint8_t findConfiguredWifiNetworkIndex() const;
     uint8_t nearestVolumeLevel(uint8_t volume) const;
     bool hasSpeech(const int16_t* samples, size_t sampleCount) const;
     static bool readMicFrameStatic(int16_t* dest, void* context);
