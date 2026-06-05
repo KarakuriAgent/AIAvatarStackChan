@@ -5,11 +5,17 @@
 
 namespace aiavatar {
 
+enum class ListeningGlowShape : uint8_t {
+    Rectangle = 0,
+    Circle,
+};
+
 class VisualEffects {
 public:
     VisualEffects();
 
-    void showVoiceDetected(uint32_t durationMs);
+    bool showVoiceDetected(uint32_t durationMs);
+    bool clearVoiceDetected();
     void showAccepted(uint32_t durationMs = 1000);
     void showToolPulse(uint32_t durationMs = 30000);
     void showVisionFlash(uint32_t durationMs = 420);
@@ -19,6 +25,12 @@ public:
     bool update();
     void draw(LGFX_Sprite* canvas) const;
     bool voiceDetected() const;
+    void setListeningGlowShape(ListeningGlowShape shape) { glowShape_ = shape; }
+    ListeningGlowShape listeningGlowShape() const { return glowShape_; }
+    void setCircularListeningGlowWidth(float width) { circularGlowWidth_ = width; }
+    void setCircularListeningGlowSeamlessGradient(bool enabled) {
+        seamlessCircularGlowGradient_ = enabled;
+    }
 
 private:
     uint32_t voiceDetectedUntilMs_;
@@ -34,6 +46,9 @@ private:
     bool visionVisible_;
     bool errorVisible_;
     bool processingActive_;
+    ListeningGlowShape glowShape_;
+    float circularGlowWidth_;
+    bool seamlessCircularGlowGradient_;
 
     bool acceptedActive() const;
     bool toolActive() const;
@@ -42,6 +57,7 @@ private:
     bool processingVisible() const;
     bool anyEffectActive() const;
     void drawListeningBorder(LGFX_Sprite* canvas) const;
+    void drawCircularListeningBorder(LGFX_Sprite* canvas) const;
     void drawAcceptedFlash(LGFX_Sprite* canvas) const;
     void drawToolPulse(LGFX_Sprite* canvas) const;
     void drawVisionFlash(LGFX_Sprite* canvas) const;

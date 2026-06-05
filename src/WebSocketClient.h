@@ -75,6 +75,7 @@ public:
     bool sendAudioData(const int16_t* pcmData, size_t sampleCount, uint32_t* elapsedMs = nullptr);
     bool sendInvoke(const char* text);
     bool sendInvokeWithImage(const char* text, const char* imageDataUrl);
+    bool reserveInvokeAudioBuffer(size_t sampleCount);
     bool sendInvokeWithAudio(const int16_t* pcmData, size_t sampleCount);
     void sendStop();
 
@@ -123,6 +124,8 @@ private:
     uint32_t keepaliveIntervalMs_;
     uint32_t audioTxResumeMs_;
     uint32_t lastAudioSendMs_;
+    char* invokeAudioBuf_;
+    size_t invokeAudioBufCapacity_;
 
     void generateSessionId();
     void applyAuthHeader();

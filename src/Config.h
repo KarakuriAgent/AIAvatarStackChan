@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+class Stream;
+
 namespace aiavatar {
 
 static constexpr size_t kMicBufferSamplesMax = 2048;
@@ -13,10 +15,17 @@ static constexpr uint8_t kMaxWifiNetworks = 5;
 static constexpr uint8_t kMaxVolumeLevels = 8;
 static constexpr size_t kInvokePromptMaxLen = 512;
 
+enum class SleepWifiMode : uint8_t {
+    Sleep,
+    Off,
+};
+
 struct WifiNetworkConfig {
     char ssid[64];
     char pass[64];
     char name[64];
+    SleepWifiMode sleepWifiMode;
+    bool sleepWifiModeConfigured;
 };
 
 struct RgbColor {
@@ -47,6 +56,8 @@ struct Config {
     size_t playbackStartThreshold;
     uint32_t playbackDrainTimeoutMs;
     uint8_t speakerVolume;
+    float audioNormalizeTargetPeak;
+    float audioNormalizeMaxGain;
     uint8_t volumeLevels[kMaxVolumeLevels];
     uint8_t volumeLevelCount;
 
@@ -61,6 +72,10 @@ struct Config {
 
     uint8_t displayRotation;
     uint8_t displayBrightness;
+    bool sleepEnabled;
+    uint32_t sleepTimeoutMs;
+    uint8_t sleepDisplayBrightness;
+    SleepWifiMode sleepWifiMode;
     bool statusOverlayEnabled;
     uint32_t visionPreviewDurationMs;
     RgbColor acceptedLedColor;
@@ -80,9 +95,12 @@ struct Config {
     char nadeInvokePrompt[kInvokePromptMaxLen];
     char visionInvokePrompt[kInvokePromptMaxLen];
 
+    bool fastStartup;
     bool debugLog;
 
     Config();
+    bool loadFromJson(Stream& stream);
+    bool loadFromJsonBytes(const uint8_t* data, size_t len);
     bool loadFromSD(const char* path = "/config.json");
 };
 
