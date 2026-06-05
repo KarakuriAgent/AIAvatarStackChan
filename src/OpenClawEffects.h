@@ -20,6 +20,7 @@ public:
     bool handleResponseStart(const char* text);
     void update();
     void draw(LGFX_Sprite* canvas) const;
+    void preload();
 
 private:
     static constexpr const char* kResponseMarker =
@@ -45,8 +46,8 @@ private:
     uint32_t ledLastStepMs_;
     uint8_t ledStep_;
     bool spritesLoaded_;
-    LGFX_Sprite* sprite01_;
-    LGFX_Sprite* sprite02_;
+    SpriteLayer sprite01_;
+    SpriteLayer sprite02_;
     ImagePhase imagePhase_;
     uint32_t imagePhaseStartMs_;
 

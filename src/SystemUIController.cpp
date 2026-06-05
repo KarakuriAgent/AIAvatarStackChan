@@ -13,6 +13,7 @@ SystemUIController::SystemUIController()
       config_(nullptr),
       statusOverlay_(nullptr),
       virtualButtonsEnabled_(true),
+      touchPushToTalkEnabled_(true),
       virtualButtonAreas_{{0, 190, 72, 50}, {124, 190, 72, 50}, {248, 190, 72, 50}},
       buttonActions_{ButtonAction::VolumeCycle, ButtonAction::None, ButtonAction::None},
       uiVisible_(true),
@@ -26,7 +27,14 @@ SystemUIController::SystemUIController()
       touchStartX_(0),
       touchStartY_(0),
       touchLastX_(0),
-      touchLastY_(0) {}
+      touchLastY_(0),
+      systemBarHeight_(36),
+      menuHorizontalMargin_(40),
+      menuItemHeight_(24),
+      menuTextSize_(1),
+      menuPaddingX_(12),
+      menuPaddingY_(8),
+      unhandledTapCb_(nullptr) {}
 
 void SystemUIController::begin(AIAvatar& avatar, const Config& config,
                                StatusOverlay& statusOverlay) {
@@ -45,6 +53,7 @@ void SystemUIController::update() {
     if (!M5.Touch.isEnabled()) return;
     auto detail = M5.Touch.getDetail();
     recordTouch(detail);
+    if (avatar_->wasSleepWakeTriggered()) return;
     updateHold(detail);
     if (consumeSwipe(detail)) return;
 
@@ -62,17 +71,18 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
     if (itemCount == 0) return;
 
     UiRect bounds = menuBounds();
-    const int itemH = 24;
-    const int paddingX = 12;
-    const int paddingY = 8;
+    const int itemH = menuItemHeight_;
+    const int paddingX = menuPaddingX_;
+    const int paddingY = menuPaddingY_;
+    const int textH = 8 * menuTextSize_;
 
     canvas->fillRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, 0x1082);
     canvas->drawRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, 0x4208);
-    canvas->setTextSize(1);
+    canvas->setTextSize(menuTextSize_);
 
     for (uint8_t i = 0; i < itemCount; ++i) {
         int itemY = bounds.y + paddingY + i * itemH;
-        int textY = itemY + (itemH - 8) / 2;
+        int textY = itemY + (itemH - textH) / 2;
 
         if (i == selected_) {
             canvas->fillRoundRect(bounds.x + 4, itemY + 2, bounds.w - 8, itemH - 4, 4, 0x001F);
@@ -139,6 +149,8 @@ void SystemUIController::runButtonAction(ButtonId id) {
         case ButtonAction::MicToggle:
             avatar_->toggleMicMuted();
             break;
+        case ButtonAction::PushToTalk:
+            break;
         case ButtonAction::None:
         default:
             break;
@@ -164,6 +176,9 @@ void SystemUIController::handleTap(int16_t x, int16_t y) {
     if (handleVirtualButtonTap(x, y)) {
         return;
     }
+    if (unhandledTapCb_ && unhandledTapCb_(x, y)) {
+        return;
+    }
 }
 
 bool SystemUIController::handleVirtualButtonTap(int16_t x, int16_t y) {
@@ -183,7 +198,7 @@ void SystemUIController::updateHold(const m5::touch_detail_t& detail) {
 
     if (touchActive_ && !touchHeld_ && detail.isPressed()) {
         if (millis() - touchStartMs_ >= config_->pttHoldThresholdMs &&
-            !isSystemBarTouch(touchStartY_) &&
+            isPushToTalkTouch(touchStartX_, touchStartY_) &&
             !touchMovedBeyondTapThreshold()) {
             touchHeld_ = avatar_->startPushToTalk();
         }
@@ -194,6 +209,26 @@ void SystemUIController::updateHold(const m5::touch_detail_t& detail) {
         touchHeld_ = false;
         touchActive_ = false;
     }
+}
+
+bool SystemUIController::hasPushToTalkButton() const {
+    if (!virtualButtonsEnabled_) return false;
+    for (uint8_t i = 0; i < kButtonCount; ++i) {
+        if (buttonActions_[i] == ButtonAction::PushToTalk) return true;
+    }
+    return false;
+}
+
+bool SystemUIController::isPushToTalkTouch(int16_t x, int16_t y) const {
+    if (!touchPushToTalkEnabled_) return false;
+    if (hasPushToTalkButton()) {
+        for (uint8_t i = 0; i < kButtonCount; ++i) {
+            if (buttonActions_[i] != ButtonAction::PushToTalk) continue;
+            if (virtualButtonAreas_[i].contains(x, y)) return true;
+        }
+        return false;
+    }
+    return !isSystemBarTouch(y);
 }
 
 void SystemUIController::openMenu() {
@@ -214,6 +249,7 @@ void SystemUIController::closeMenu() {
 
 void SystemUIController::recordTouch(const m5::touch_detail_t& detail) {
     if (detail.wasPressed()) {
+        avatar_->resetSleepTimer("touch");
         touchActive_ = true;
         touchHeld_ = false;
         touchStartMs_ = millis();
@@ -303,13 +339,15 @@ uint8_t SystemUIController::menuItemCount() const {
 
 UiRect SystemUIController::menuBounds() const {
     uint8_t itemCount = menuItemCount();
-    const int itemH = 24;
-    const int paddingY = 8;
-    const int marginX = 40;
-    int menuW = M5.Display.width() - marginX * 2;
+    const int itemH = menuItemHeight_;
+    const int paddingY = menuPaddingY_;
+    int displayW = M5.Display.width();
+    int displayH = M5.Display.height();
+    const int marginX = menuHorizontalMargin_;
+    int menuW = displayW - marginX * 2;
     int menuH = itemCount * itemH + paddingY * 2;
     int menuX = marginX;
-    int menuY = (M5.Display.height() - menuH) / 2;
+    int menuY = (displayH - menuH) / 2;
     return {static_cast<int16_t>(menuX), static_cast<int16_t>(menuY),
             static_cast<int16_t>(menuW), static_cast<int16_t>(menuH)};
 }
@@ -318,8 +356,8 @@ int8_t SystemUIController::menuIndexAt(int16_t x, int16_t y) const {
     UiRect bounds = menuBounds();
     if (!bounds.contains(x, y)) return -1;
 
-    const int itemH = 24;
-    const int paddingY = 8;
+    const int itemH = menuItemHeight_;
+    const int paddingY = menuPaddingY_;
     int localY = y - bounds.y - paddingY;
     if (localY < 0) return -1;
     uint8_t index = localY / itemH;

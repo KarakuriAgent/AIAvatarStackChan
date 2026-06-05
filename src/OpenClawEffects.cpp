@@ -1,7 +1,6 @@
 #include "OpenClawEffects.h"
 
 #include <Arduino.h>
-#include <SD.h>
 #include <cstring>
 
 namespace aiavatar {
@@ -15,14 +14,18 @@ OpenClawEffects::OpenClawEffects()
       ledLastStepMs_(0),
       ledStep_(0),
       spritesLoaded_(false),
-      sprite01_(nullptr),
-      sprite02_(nullptr),
+      sprite01_{nullptr, 0, 0, ScreenRenderer::kTransparentColor},
+      sprite02_{nullptr, 0, 0, ScreenRenderer::kTransparentColor},
       imagePhase_(ImagePhase::Idle),
       imagePhaseStartMs_(0) {}
 
 void OpenClawEffects::begin(ScreenRenderer& display, LedController& leds) {
     display_ = &display;
     leds_ = &leds;
+}
+
+void OpenClawEffects::preload() {
+    loadSprites();
 }
 
 void OpenClawEffects::setEnabled(bool enabled) {
@@ -50,7 +53,6 @@ bool OpenClawEffects::handleResponseStart(const char* text) {
 
 void OpenClawEffects::update() {
     if (!enabled_) return;
-    loadSprites();
     updateLed();
     updateImage();
 }
@@ -58,14 +60,14 @@ void OpenClawEffects::update() {
 void OpenClawEffects::draw(LGFX_Sprite* canvas) const {
     if (!canvas || !enabled_ || imagePhase_ == ImagePhase::Idle) return;
 
-    LGFX_Sprite* sprite = nullptr;
+    const SpriteLayer* sprite = nullptr;
     if (imagePhase_ == ImagePhase::Intro || imagePhase_ == ImagePhase::Outro) {
-        sprite = sprite01_;
+        sprite = &sprite01_;
     } else if (imagePhase_ == ImagePhase::Main) {
-        sprite = sprite02_;
+        sprite = &sprite02_;
     }
-    if (sprite) {
-        sprite->pushSprite(canvas, 0, 0, ScreenRenderer::kTransparentColor);
+    if (sprite && sprite->valid()) {
+        sprite->sprite->pushSprite(canvas, sprite->x, sprite->y, sprite->transparentColor);
     }
 }
 
@@ -91,13 +93,12 @@ void OpenClawEffects::loadSprites() {
 
     int w = display_->width();
     int h = display_->height();
-    if (SD.exists("/avatar/claw_01.png")) {
-        sprite01_ = display_->loadSprite(
-            "/avatar/claw_01.png", w, h, ScreenRenderer::kTransparentColor);
-    }
-    if (SD.exists("/avatar/claw_02.png")) {
-        sprite02_ = display_->loadSprite(
-            "/avatar/claw_02.png", w, h, ScreenRenderer::kTransparentColor);
+    sprite01_ = display_->loadLayerSprite(
+        "/avatar/claw_01.png", w, h, ScreenRenderer::kTransparentColor);
+    sprite02_ = display_->loadLayerSprite(
+        "/avatar/claw_02.png", w, h, ScreenRenderer::kTransparentColor);
+    if (!sprite01_.valid() && !sprite02_.valid()) {
+        Serial.println("[OpenClaw] image sprites unavailable; image effect disabled");
     }
 }
 

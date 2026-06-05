@@ -9,6 +9,8 @@
 #include "LedController.h"
 #include "MotionController.h"
 #include "OpenClawEffects.h"
+#include "ResourceProvider.h"
+#include "SleepManager.h"
 #include "StackChanHardware.h"
 #include "StatusOverlay.h"
 #include "SystemUIController.h"
@@ -29,6 +31,7 @@ public:
     AIAvatar();
 
     bool begin(const Config& config);
+    bool begin(const Config& config, const ResourceProvider& resources);
     bool useStackChan();
     void update();
     void setVolume(uint8_t volume);
@@ -42,6 +45,8 @@ public:
     void connectWebSocket();
     void disconnectWebSocket();
     void switchWiFi(uint8_t networkIndex);
+    bool invokeText(const char* text);
+    void resetSleepTimer(const char* reason);
 
     WebSocketClient& websocket() { return ws_; }
     MicrophoneInput& microphone() { return mic_; }
@@ -64,6 +69,14 @@ public:
     bool isMicMuted() const { return micMuted_; }
     bool isServerProcessing() const { return serverProcessing_; }
     bool isPushToTalkActive() const { return pushToTalkActive_; }
+    bool isSleeping() const { return sleepManager_.isSleeping(); }
+    bool isWifiOffForSleep() const { return sleepManager_.isWifiOff(); }
+    bool wasSleepWakeTriggered() const { return sleepManager_.wakeActivityTriggered(); }
+    uint8_t currentDisplayBrightness() const { return sleepManager_.currentDisplayBrightness(); }
+    bool isStartupComplete() const {
+        return !config_.fastStartup ||
+               (deferredStartupStage_ >= 7 && face_.deferredLoadingComplete());
+    }
 
     void onSpeechDetected(SpeechDetectedCallback cb) { speechDetectedCb_ = cb; }
     void onNade(NadeCallback cb) { userNadeCb_ = cb; }
@@ -94,6 +107,8 @@ private:
     SystemUIController systemUI_;
     VisualEffects visualEffects_;
     OpenClawEffects openClaw_;
+    SleepManager sleepManager_;
+    ResourceProvider defaultResources_;
 
     volatile bool micMuted_;
     volatile bool serverProcessing_;
@@ -105,6 +120,14 @@ private:
     volatile bool visionRequestPending_;
     volatile bool wsStopPending_;
     bool stackChanHardwareEnabled_;
+    bool wifiStarted_;
+    bool speakerReady_;
+    bool websocketReady_;
+    bool openClawReady_;
+    bool deferredImagesLogged_;
+    uint8_t deferredStartupStage_;
+    uint32_t deferredStartupNextMs_;
+    uint32_t heavyDeferredResumeMs_;
     uint8_t volume_;
     uint8_t volumeLevelIndex_;
     uint32_t volumeOverlayUntilMs_;
@@ -121,6 +144,7 @@ private:
     size_t pttBufCapacity_;
     volatile size_t pttBufPos_;
     uint32_t pttStartMs_;
+    uint32_t pttSendRetryMs_;
     uint8_t* visionPreviewJpg_;
     size_t visionPreviewJpgLen_;
     uint32_t visionPreviewUntilMs_;
@@ -140,6 +164,8 @@ private:
     ScreenOverlayCallback userOverlayCb_;
 
     static AIAvatar* s_instance;
+    bool beginNormal();
+    bool beginFast();
     static void micTaskFunc(void* params);
     static void speakerTaskFunc(void* params);
     static void wsTaskFunc(void* params);
@@ -149,6 +175,12 @@ private:
     void handlePttSend();
     void handleInvokeTextSend();
     void handleVisionRequest();
+    void updateDeferredStartup();
+    void beginDeferredWiFi();
+    void beginDeferredSpeaker();
+    void beginDeferredWebSocket();
+    void beginDeferredOpenClaw();
+    bool canRunHeavyDeferredWork() const;
     bool queueInvokeText(const char* text);
     void beginWiFi();
     void updateWiFi();
@@ -158,6 +190,7 @@ private:
     void showVisionPreview(const uint8_t* jpgBuf, size_t jpgLen);
     void updateVisionPreview();
     void drawVisionPreview(LGFX_Sprite* canvas);
+    void logMemoryUsage(const char* label) const;
     uint8_t nearestVolumeLevel(uint8_t volume) const;
     bool hasSpeech(const int16_t* samples, size_t sampleCount) const;
     static bool readMicFrameStatic(int16_t* dest, void* context);

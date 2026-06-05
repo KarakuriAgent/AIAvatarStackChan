@@ -47,5 +47,10 @@
   "stackchan_auto_angle_sync": true,
   "nade_invoke_prompt": "$The user gently patted your head. React with one very short phrase. If they pat you too often in a short time, you may sound a little annoyed or shy. When you are upset or troubled, you may use angry or sorrow as the face.",
   "vision_invoke_prompt": "$I am providing visual context needed for your reply. Do not merely describe what is visible; respond appropriately as if you saw this image in the current conversation context.",
+  "sleep_enabled": true,
+  "sleep_timeout_ms": 1800000,
+  "sleep_display_brightness": 32,
+  "sleep_wifi_mode": "sleep",
+  "fast_startup": true,
   "debug_log": false
 }
