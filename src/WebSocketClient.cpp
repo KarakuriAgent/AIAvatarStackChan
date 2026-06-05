@@ -58,7 +58,9 @@ WebSocketClient::WebSocketClient()
       audioTxFailBackoffMs_(3000),
       keepaliveIntervalMs_(1000),
       audioTxResumeMs_(0),
-      lastAudioSendMs_(0) {
+      lastAudioSendMs_(0),
+      invokeAudioBuf_(nullptr),
+      invokeAudioBufCapacity_(0) {
     sessionId_[0] = '\0';
     userId_[0] = '\0';
     channel_[0] = '\0';
@@ -84,6 +86,37 @@ bool WebSocketClient::configureAudioUpload(const AudioFrameProvider& provider,
             return false;
         }
     }
+    return true;
+}
+
+bool WebSocketClient::reserveInvokeAudioBuffer(size_t sampleCount) {
+    if (sampleCount == 0) return false;
+
+    size_t rawBytes = sampleCount * sizeof(int16_t);
+    if (uploadConverter_) {
+        size_t encodedCapacity = uploadConverter_->maxEncodedBytes(sampleCount, uploadPcmChannels_);
+        if (encodedCapacity == 0) return false;
+        rawBytes = encodedCapacity;
+    }
+
+    size_t b64Len = ((rawBytes + 2) / 3) * 4;
+    static constexpr size_t kJsonOverhead = 480;
+    size_t required = kJsonOverhead + b64Len + 1;
+    if (invokeAudioBuf_ && invokeAudioBufCapacity_ >= required) return true;
+
+    free(invokeAudioBuf_);
+    invokeAudioBuf_ = static_cast<char*>(ps_malloc(required));
+    if (!invokeAudioBuf_) invokeAudioBuf_ = static_cast<char*>(malloc(required));
+    invokeAudioBufCapacity_ = invokeAudioBuf_ ? required : 0;
+    if (!invokeAudioBuf_) {
+        Serial.printf("[WS] invoke audio reserve failed (%u bytes)\n",
+                      static_cast<unsigned>(required));
+        return false;
+    }
+
+    Serial.printf("[WS] invoke audio buffer=%uKB for %u samples\n",
+                  static_cast<unsigned>(required / 1024),
+                  static_cast<unsigned>(sampleCount));
     return true;
 }
 
@@ -456,10 +489,19 @@ bool WebSocketClient::sendInvokeWithAudio(const int16_t* pcmData, size_t sampleC
     if (channel_[0]) {
         snprintf(channelField, sizeof(channelField), "\"channel\":\"%s\",", channel_);
     }
-    char* buf = static_cast<char*>(ps_malloc(bufSize));
-    if (!buf) buf = static_cast<char*>(malloc(bufSize));
-    if (!buf) {
-        Serial.printf("[WS] invoke audio allocation failed (%u bytes)\n", bufSize);
+    if (!invokeAudioBuf_ || invokeAudioBufCapacity_ < bufSize) {
+        if (!reserveInvokeAudioBuffer(sampleCount)) {
+            Serial.printf("[WS] invoke audio allocation failed (%u bytes)\n",
+                          static_cast<unsigned>(bufSize));
+            free(convertedBuf);
+            return false;
+        }
+    }
+    char* buf = invokeAudioBuf_;
+    if (invokeAudioBufCapacity_ < bufSize) {
+        Serial.printf("[WS] invoke audio buffer too small required=%u capacity=%u\n",
+                      static_cast<unsigned>(bufSize),
+                      static_cast<unsigned>(invokeAudioBufCapacity_));
         free(convertedBuf);
         return false;
     }
@@ -472,7 +514,6 @@ bool WebSocketClient::sendInvokeWithAudio(const int16_t* pcmData, size_t sampleC
                              "\"audio_data\":\"",
                              sessionId_, userId_, channelField);
     if (headerLen <= 0 || static_cast<size_t>(headerLen) >= kJsonOverhead) {
-        free(buf);
         free(convertedBuf);
         return false;
     }
@@ -482,7 +523,6 @@ bool WebSocketClient::sendInvokeWithAudio(const int16_t* pcmData, size_t sampleC
                                     bufSize - headerLen, &actualB64Len,
                                     rawData, rawBytes);
     if (err != 0) {
-        free(buf);
         free(convertedBuf);
         return false;
     }
@@ -502,14 +542,12 @@ bool WebSocketClient::sendInvokeWithAudio(const int16_t* pcmData, size_t sampleC
                              "\",\"allow_merge\":false,\"wait_in_queue\":true}");
     }
     if (footerLen <= 0) {
-        free(buf);
         free(convertedBuf);
         return false;
     }
 
     size_t totalLen = headerLen + actualB64Len + footerLen;
     bool ok = ws_.sendTXT(buf, totalLen);
-    free(buf);
     free(convertedBuf);
     Serial.printf("[WS] invoke audio samples=%u b64=%uKB ok=%d\n",
                   sampleCount, static_cast<uint32_t>(actualB64Len / 1024), ok ? 1 : 0);
