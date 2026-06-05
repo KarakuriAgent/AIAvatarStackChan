@@ -85,6 +85,9 @@ Config::Config()
     strlcpy(userId, "default", sizeof(userId));
     channel[0] = '\0';
     apiKey[0] = '\0';
+    otaManifestUrl[0] = '\0';
+    otaApiKey[0] = '\0';
+    otaCaCert[0] = '\0';
     strlcpy(timezone, "JST-9", sizeof(timezone));
     strlcpy(servoType, "SCS0009", sizeof(servoType));
     strlcpy(nadeInvokePrompt,
@@ -147,6 +150,9 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
     strlcpy(config.userId, doc["user_id"] | config.userId, sizeof(config.userId));
     strlcpy(config.channel, doc["channel"] | config.channel, sizeof(config.channel));
     strlcpy(config.apiKey, doc["api_key"] | config.apiKey, sizeof(config.apiKey));
+    strlcpy(config.otaManifestUrl, doc["ota_manifest_url"] | config.otaManifestUrl, sizeof(config.otaManifestUrl));
+    strlcpy(config.otaApiKey, doc["ota_api_key"] | config.otaApiKey, sizeof(config.otaApiKey));
+    strlcpy(config.otaCaCert, doc["ota_ca_cert"] | config.otaCaCert, sizeof(config.otaCaCert));
     strlcpy(config.timezone, doc["timezone"] | config.timezone, sizeof(config.timezone));
 
     config.micSampleRate = doc["mic_sample_rate"] | config.micSampleRate;

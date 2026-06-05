@@ -59,6 +59,7 @@ SystemUIController::SystemUIController()
       selected_(0),
       settingsSelected_(0),
       settingsView_(SettingsView::Root),
+      settingsScrollOffset_(0),
       wifiScrollOffset_(0),
       settingsHoldActive_(false),
       settingsHoldTarget_(HoldTarget::None),
@@ -190,6 +191,9 @@ void SystemUIController::drawSettings(LGFX_Sprite* canvas) const {
         case SettingsView::WiFi:
             drawWifiSettings(canvas);
             break;
+        case SettingsView::Version:
+            drawVersionSettings(canvas);
+            break;
     }
 }
 
@@ -217,14 +221,32 @@ void SystemUIController::drawSettingsHeader(LGFX_Sprite* canvas, const char* tit
 }
 
 void SystemUIController::drawSettingsRoot(LGFX_Sprite* canvas) const {
-    for (uint8_t i = 0; i < settingsItemCount(); ++i) {
-        drawSettingsItem(canvas, i);
+    uint8_t visibleRows = visibleSettingsRows();
+    for (uint8_t visible = 0; visible < visibleRows; ++visible) {
+        uint8_t index = settingsScrollOffset_ + visible;
+        if (index >= settingsItemCount()) break;
+        drawSettingsItem(canvas, index);
+    }
+
+    uint8_t total = settingsItemCount();
+    if (total > visibleRows) {
+        int indicatorX = canvas->width() - 5;
+        int trackY = kSettingsHeaderHeight + 8;
+        int trackH = canvas->height() - kSettingsHeaderHeight - 16;
+        canvas->drawFastVLine(indicatorX, trackY, trackH, 0x4208);
+        int thumbH = trackH * visibleRows / total;
+        if (thumbH < 12) thumbH = 12;
+        int maxOffset = total - visibleRows;
+        int thumbY = trackY;
+        if (maxOffset > 0) thumbY += (trackH - thumbH) * settingsScrollOffset_ / maxOffset;
+        canvas->fillRoundRect(indicatorX - 2, thumbY, 4, thumbH, 2, 0xC618);
     }
 }
 
 void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) const {
     if (!canvas || !avatar_) return;
-    UiRect row = settingsItemBounds(index);
+    uint8_t visibleIndex = index >= settingsScrollOffset_ ? index - settingsScrollOffset_ : index;
+    UiRect row = settingsItemBounds(visibleIndex);
     SettingsItem item = static_cast<SettingsItem>(index);
 
     canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
@@ -266,6 +288,10 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
             } else {
                 snprintf(value, sizeof(value), "未接続");
             }
+            break;
+        case SettingsItem::Version:
+            label = "バージョン";
+            copyTruncated(value, sizeof(value), avatar_->firmwareVersion(), 18);
             break;
         case SettingsItem::Count:
         default:
@@ -363,6 +389,60 @@ void SystemUIController::drawWifiSettings(LGFX_Sprite* canvas) const {
     }
 }
 
+void SystemUIController::drawVersionSettings(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    const int left = 18;
+    int y = kSettingsHeaderHeight + 10;
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(top_left);
+
+    auto drawLabelValue = [&](const char* label, const char* value) {
+        char text[96];
+        snprintf(text, sizeof(text), "%s: %s", label, value && value[0] ? value : "-");
+        canvas->setTextColor(0xC618);
+        canvas->drawString(text, left, y);
+        y += 20;
+    };
+
+    drawLabelValue("現在", avatar_->firmwareVersion());
+    drawLabelValue("リリース", avatar_->firmwareReleaseDate());
+
+    const OtaManifest& manifest = avatar_->otaManifest();
+    if (manifest.version[0]) {
+        char latest[72];
+        if (manifest.releaseDate[0]) {
+            snprintf(latest, sizeof(latest), "%s %s", manifest.version, manifest.releaseDate);
+        } else {
+            strlcpy(latest, manifest.version, sizeof(latest));
+        }
+        drawLabelValue("最新", latest);
+    } else {
+        drawLabelValue("最新", "未確認");
+    }
+
+    char status[96];
+    copyTruncated(status, sizeof(status), avatar_->otaStatusMessage(), 28);
+    drawLabelValue("状態", status);
+
+    int progress = avatar_->otaProgressPercent();
+    if (avatar_->otaUpdateStatus() == OtaUpdateStatus::Updating && progress >= 0) {
+        int barX = left;
+        int barY = y + 2;
+        int barW = canvas->width() - left * 2;
+        int barH = 10;
+        canvas->drawRoundRect(barX, barY, barW, barH, 3, 0x8410);
+        int fillW = (barW - 2) * progress / 100;
+        if (fillW > 0) canvas->fillRoundRect(barX + 1, barY + 1, fillW, barH - 2, 2, TFT_GREEN);
+    }
+
+    bool busy = avatar_->otaBusy();
+    drawOtaActionButton(canvas, otaCheckButtonBounds(), "アップデート確認", !busy);
+    drawOtaActionButton(canvas, otaUpdateButtonBounds(), "アップデート実行",
+                        !busy && avatar_->otaUpdateAvailable());
+}
+
 void SystemUIController::drawStepper(LGFX_Sprite* canvas, int value, int minValue, int maxValue,
                                      const char* unit) const {
     if (!canvas) return;
@@ -447,6 +527,14 @@ void SystemUIController::drawSettingsIcon(LGFX_Sprite* canvas, SettingsItem item
             canvas->drawLine(cx, y + 10, cx + 3, y + 11, color);
             canvas->drawLine(cx + 3, y + 11, cx + 6, y + 13, color);
             canvas->fillCircle(cx, y + 18, 2, color);
+            break;
+        case SettingsItem::Version:
+            canvas->drawRoundRect(x + 4, y + 3, s - 8, s - 6, 3, color);
+            canvas->setFont(&fonts::Font2);
+            canvas->setTextSize(1);
+            canvas->setTextDatum(middle_center);
+            canvas->setTextColor(color);
+            canvas->drawString("V", cx, cy + 1);
             break;
         case SettingsItem::Count:
         default:
@@ -641,6 +729,7 @@ void SystemUIController::openSettings() {
     menuOpen_ = false;
     menuClosePending_ = false;
     settingsSelected_ = 0;
+    settingsScrollOffset_ = 0;
     settingsHoldActive_ = false;
     settingsHoldTarget_ = HoldTarget::None;
     avatar_->display().setDirty();
@@ -699,9 +788,13 @@ bool SystemUIController::consumeSwipe(const m5::touch_detail_t& detail) {
             handleSettingsBack();
             return true;
         }
-        bool vertical = settingsView_ == SettingsView::WiFi && abs(dx) <= kSwipeMaxHorizontal &&
-                        abs(dy) >= kSwipeThreshold;
-        if (vertical) {
+        bool vertical = abs(dx) <= kSwipeMaxHorizontal && abs(dy) >= kSwipeThreshold;
+        if (vertical && settingsView_ == SettingsView::Root) {
+            touchActive_ = false;
+            scrollSettings(dy < 0 ? 1 : -1);
+            return true;
+        }
+        if (vertical && settingsView_ == SettingsView::WiFi) {
             touchActive_ = false;
             scrollWifi(dy < 0 ? 1 : -1);
             return true;
@@ -768,6 +861,9 @@ void SystemUIController::handleSettingsTap(int16_t x, int16_t y) {
         case SettingsView::WiFi:
             handleWifiTap(x, y);
             break;
+        case SettingsView::Version:
+            handleVersionTap(x, y);
+            break;
     }
 }
 
@@ -803,6 +899,16 @@ void SystemUIController::handleWifiTap(int16_t x, int16_t y) {
     avatar_->display().setDirty();
 }
 
+void SystemUIController::handleVersionTap(int16_t x, int16_t y) {
+    if (otaCheckButtonBounds().contains(x, y)) {
+        avatar_->checkForFirmwareUpdate();
+        return;
+    }
+    if (otaUpdateButtonBounds().contains(x, y) && avatar_->otaUpdateAvailable() && !avatar_->otaBusy()) {
+        avatar_->startFirmwareUpdate();
+    }
+}
+
 void SystemUIController::runMenuAction(uint8_t index) {
     if (!avatar_) return;
 
@@ -834,6 +940,9 @@ void SystemUIController::runSettingsAction(uint8_t index) {
         case SettingsItem::WiFi:
             settingsView_ = SettingsView::WiFi;
             wifiScrollOffset_ = 0;
+            break;
+        case SettingsItem::Version:
+            settingsView_ = SettingsView::Version;
             break;
         case SettingsItem::Count:
         default:
@@ -944,6 +1053,12 @@ uint8_t SystemUIController::settingsItemCount() const {
     return static_cast<uint8_t>(SettingsItem::Count);
 }
 
+uint8_t SystemUIController::visibleSettingsRows() const {
+    int rows = (M5.Display.height() - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (rows < 1) return 1;
+    return static_cast<uint8_t>(rows);
+}
+
 UiRect SystemUIController::settingsBackBounds() const {
     return {0, 0, kSettingsBackButtonWidth, kSettingsHeaderHeight};
 }
@@ -957,7 +1072,9 @@ UiRect SystemUIController::settingsItemBounds(uint8_t index) const {
 int8_t SystemUIController::settingsIndexAt(int16_t x, int16_t y) const {
     (void)x;
     if (y < kSettingsHeaderHeight) return -1;
-    uint8_t index = (y - kSettingsHeaderHeight) / kSettingsRowHeight;
+    uint8_t visibleIndex = (y - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (visibleIndex >= visibleSettingsRows()) return -1;
+    uint8_t index = settingsScrollOffset_ + visibleIndex;
     if (index >= settingsItemCount()) return -1;
     return static_cast<int8_t>(index);
 }
@@ -988,6 +1105,18 @@ int8_t SystemUIController::wifiIndexAt(int16_t x, int16_t y) const {
     return static_cast<int8_t>(index);
 }
 
+void SystemUIController::scrollSettings(int8_t delta) {
+    uint8_t total = settingsItemCount();
+    uint8_t visible = visibleSettingsRows();
+    int maxOffset = total > visible ? total - visible : 0;
+    int offset = settingsScrollOffset_ + delta;
+    if (offset < 0) offset = 0;
+    if (offset > maxOffset) offset = maxOffset;
+    if (settingsScrollOffset_ == offset) return;
+    settingsScrollOffset_ = offset;
+    avatar_->display().setDirty();
+}
+
 void SystemUIController::scrollWifi(int8_t delta) {
     uint8_t total = wifiItemCount();
     uint8_t visible = visibleWifiRows();
@@ -1010,8 +1139,36 @@ const char* SystemUIController::settingsTitle() const {
             return "スピーカー";
         case SettingsView::WiFi:
             return "Wi-Fi";
+        case SettingsView::Version:
+            return "バージョン";
     }
     return "設定";
+}
+
+UiRect SystemUIController::otaCheckButtonBounds() const {
+    int displayW = M5.Display.width();
+    int y = M5.Display.height() - 80;
+    return {18, static_cast<int16_t>(y), static_cast<int16_t>(displayW - 36), 32};
+}
+
+UiRect SystemUIController::otaUpdateButtonBounds() const {
+    int displayW = M5.Display.width();
+    int y = M5.Display.height() - 38;
+    return {18, static_cast<int16_t>(y), static_cast<int16_t>(displayW - 36), 32};
+}
+
+void SystemUIController::drawOtaActionButton(LGFX_Sprite* canvas, UiRect bounds,
+                                             const char* label, bool enabled) const {
+    uint16_t fill = enabled ? 0x03E0 : 0x2104;
+    uint16_t outline = enabled ? TFT_GREEN : 0x528A;
+    uint16_t text = enabled ? TFT_BLACK : 0x8410;
+    canvas->fillRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, fill);
+    canvas->drawRoundRect(bounds.x, bounds.y, bounds.w, bounds.h, 8, outline);
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(middle_center);
+    canvas->setTextColor(text);
+    canvas->drawString(label, bounds.x + bounds.w / 2, bounds.y + bounds.h / 2);
 }
 
 bool SystemUIController::consumeTap(const m5::touch_detail_t& detail, int16_t& x, int16_t& y) {

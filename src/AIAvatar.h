@@ -9,6 +9,7 @@
 #include "LedController.h"
 #include "MotionController.h"
 #include "OpenClawEffects.h"
+#include "OtaUpdater.h"
 #include "ResourceProvider.h"
 #include "SleepManager.h"
 #include "StackChanHardware.h"
@@ -49,6 +50,8 @@ public:
     void switchWiFi(uint8_t networkIndex);
     bool invokeText(const char* text);
     void resetSleepTimer(const char* reason);
+    bool checkForFirmwareUpdate();
+    bool startFirmwareUpdate();
 
     WebSocketClient& websocket() { return ws_; }
     MicrophoneInput& microphone() { return mic_; }
@@ -79,6 +82,15 @@ public:
     uint8_t currentVolumeLevel() const { return volumeLevelIndex_; }
     uint8_t volumeLevelCount() const { return config_.volumeLevelCount; }
     uint8_t currentVolume() const { return volume_; }
+    const char* firmwareVersion() const;
+    const char* firmwareReleaseDate() const;
+    const char* otaManifestUrl() const { return config_.otaManifestUrl; }
+    OtaUpdateStatus otaUpdateStatus() const { return otaUpdater_.status(); }
+    const char* otaStatusMessage() const { return otaUpdater_.statusMessage(); }
+    int otaProgressPercent() const { return otaUpdater_.progressPercent(); }
+    bool otaUpdateAvailable() const { return otaUpdater_.updateAvailable(); }
+    bool otaBusy() const { return otaUpdater_.busy(); }
+    const OtaManifest& otaManifest() const { return otaUpdater_.manifest(); }
     bool isStartupComplete() const {
         return !config_.fastStartup ||
                (deferredStartupStage_ >= 7 && face_.deferredLoadingComplete());
@@ -113,6 +125,7 @@ private:
     SystemUIController systemUI_;
     VisualEffects visualEffects_;
     OpenClawEffects openClaw_;
+    OtaUpdater otaUpdater_;
     SleepManager sleepManager_;
     ResourceProvider defaultResources_;
 

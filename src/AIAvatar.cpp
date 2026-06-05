@@ -1,5 +1,7 @@
 #include "AIAvatar.h"
 
+#include "FirmwareInfo.h"
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Preferences.h>
@@ -110,6 +112,7 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     defaultResources_ = resources;
     config_ = config;
     loadPersistedSettings();
+    otaUpdater_.begin(config_);
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
     volume_ = config_.speakerVolume;
     speaker_.setAutoNormalize(config_.audioNormalizeTargetPeak,
@@ -309,6 +312,9 @@ void AIAvatar::update() {
     updateWiFi();
     systemUI_.update();
     updatePersistedSettings();
+    if (otaUpdater_.consumeChanged()) {
+        display_.setDirty();
+    }
     if (config_.fastStartup && deferredStartupStage_ >= 7) {
         face_.setDeferredLoadingEnabled(canRunHeavyDeferredWork());
     }
@@ -451,6 +457,32 @@ void AIAvatar::beginDeferredOpenClaw() {
     openClaw_.begin(display_, leds_);
     openClaw_.preload();
     openClawReady_ = true;
+}
+
+
+const char* AIAvatar::firmwareVersion() const {
+    return kFirmwareVersion;
+}
+
+const char* AIAvatar::firmwareReleaseDate() const {
+    return kFirmwareReleaseDate;
+}
+
+bool AIAvatar::checkForFirmwareUpdate() {
+    resetSleepTimer("OTA check");
+    bool ok = otaUpdater_.checkForUpdate();
+    display_.setDirty();
+    return ok;
+}
+
+bool AIAvatar::startFirmwareUpdate() {
+    resetSleepTimer("OTA update");
+    if (otaUpdater_.updateAvailable()) {
+        wsDisconnectPending_ = true;
+    }
+    bool ok = otaUpdater_.startUpdate();
+    display_.setDirty();
+    return ok;
 }
 
 void AIAvatar::setVolume(uint8_t volume) {

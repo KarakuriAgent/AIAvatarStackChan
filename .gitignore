@@ -45,6 +45,11 @@ sdcard/
 private/
 examples/stackchan/basic/src/BuiltinFirmwareAssets.cpp
 examples/stackchan/basic/src/BuiltinFirmwareAssets.h
+examples/ota_server/dist/
+examples/ota_server/.env
+examples/ota_server/ota_server.log
+examples/ota_server/ota_server.pid
+src/FirmwareInfoGenerated.h
 
 __pycache__
 recorded_voices

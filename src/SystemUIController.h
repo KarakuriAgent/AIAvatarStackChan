@@ -63,6 +63,7 @@ private:
         Mic,
         Speaker,
         WiFi,
+        Version,
         Count,
     };
 
@@ -71,6 +72,7 @@ private:
         Brightness,
         Speaker,
         WiFi,
+        Version,
     };
 
     enum class HoldTarget : uint8_t {
@@ -93,6 +95,7 @@ private:
     uint8_t selected_;
     uint8_t settingsSelected_;
     SettingsView settingsView_;
+    int16_t settingsScrollOffset_;
     int16_t wifiScrollOffset_;
     bool settingsHoldActive_;
     HoldTarget settingsHoldTarget_;
@@ -152,6 +155,7 @@ private:
     UiRect menuBounds() const;
     int8_t menuIndexAt(int16_t x, int16_t y) const;
     uint8_t settingsItemCount() const;
+    uint8_t visibleSettingsRows() const;
     UiRect settingsBackBounds() const;
     UiRect settingsItemBounds(uint8_t index) const;
     int8_t settingsIndexAt(int16_t x, int16_t y) const;
@@ -161,6 +165,7 @@ private:
     void handleBrightnessTap(int16_t x, int16_t y);
     void handleSpeakerTap(int16_t x, int16_t y);
     void handleWifiTap(int16_t x, int16_t y);
+    void handleVersionTap(int16_t x, int16_t y);
     void adjustBrightness(int8_t delta);
     void adjustSpeakerVolume(int8_t delta);
     void adjustHoldTarget(HoldTarget target, int8_t delta);
@@ -171,6 +176,7 @@ private:
     uint8_t wifiItemCount() const;
     UiRect wifiItemBounds(uint8_t visibleIndex) const;
     int8_t wifiIndexAt(int16_t x, int16_t y) const;
+    void scrollSettings(int8_t delta);
     void scrollWifi(int8_t delta);
     const char* settingsTitle() const;
     void drawNetworkMenu(LGFX_Sprite* canvas) const;
@@ -181,9 +187,13 @@ private:
     void drawBrightnessSettings(LGFX_Sprite* canvas) const;
     void drawSpeakerSettings(LGFX_Sprite* canvas) const;
     void drawWifiSettings(LGFX_Sprite* canvas) const;
+    void drawVersionSettings(LGFX_Sprite* canvas) const;
     void drawStepper(LGFX_Sprite* canvas, int value, int minValue, int maxValue, const char* unit) const;
     void drawAdjustButton(LGFX_Sprite* canvas, UiRect bounds, char symbol) const;
     void drawSettingsIcon(LGFX_Sprite* canvas, SettingsItem item, UiRect bounds) const;
+    UiRect otaCheckButtonBounds() const;
+    UiRect otaUpdateButtonBounds() const;
+    void drawOtaActionButton(LGFX_Sprite* canvas, UiRect bounds, const char* label, bool enabled) const;
     bool consumeTap(const m5::touch_detail_t& detail, int16_t& x, int16_t& y);
     bool isSystemBarTouch(int16_t y) const { return y <= systemBarHeight_; }
 };

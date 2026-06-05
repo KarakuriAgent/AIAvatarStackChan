@@ -44,6 +44,9 @@ struct Config {
     char channel[32];
     char timezone[48];
     char apiKey[512];
+    char otaManifestUrl[256];
+    char otaApiKey[160];
+    char otaCaCert[2048];
     WifiNetworkConfig wifiNetworks[kMaxWifiNetworks];
     uint8_t wifiNetworkCount;
 
