@@ -19,6 +19,7 @@ constexpr const char* kSettingsPrefsNamespace = "aiavatar";
 constexpr const char* kPrefsDisplayBrightnessKey = "disp_brt";
 constexpr const char* kPrefsSpeakerVolumeKey = "spk_vol";
 constexpr const char* kPrefsMicMutedKey = "mic_mute";
+constexpr const char* kPrefsSpeakerMutedKey = "spk_mute";
 constexpr const char* kPrefsWifiIndexKey = "wifi_idx";
 constexpr uint8_t kNoWifiNetworkIndex = 0xff;
 constexpr uint32_t kSettingsSaveDebounceMs = 700;
@@ -29,6 +30,7 @@ AIAvatar* AIAvatar::s_instance = nullptr;
 
 AIAvatar::AIAvatar()
     : micMuted_(false),
+      speakerMuted_(false),
       serverProcessing_(false),
       wsConnectPending_(false),
       wsDisconnectPending_(false),
@@ -208,7 +210,7 @@ bool AIAvatar::beginNormal() {
     if (!speaker_.begin(config_.playbackQueueDepth, config_.playbackStartThreshold)) {
         return false;
     }
-    speaker_.setVolume(volume_);
+    speaker_.setVolume(effectiveSpeakerVolume());
     speakerReady_ = true;
 
     display_.setResourceProvider(&defaultResources_);
@@ -420,7 +422,7 @@ void AIAvatar::beginDeferredSpeaker() {
         Serial.println("[AIAvatar] speaker init failed");
         return;
     }
-    speaker_.setVolume(volume_);
+    speaker_.setVolume(effectiveSpeakerVolume());
     speakerReady_ = true;
     xTaskCreatePinnedToCore(AIAvatar::speakerTaskFunc, "AIAvatarSpeaker",
                             config_.audioTaskStackSize, this, 1, &speakerTaskHandle_,
@@ -491,7 +493,7 @@ void AIAvatar::setVolume(uint8_t volume) {
     volume_ = volume;
     config_.speakerVolume = volume;
     volumeOverlayUntilMs_ = millis() + 2000;
-    speaker_.setVolume(volume_);
+    speaker_.setVolume(effectiveSpeakerVolume());
     display_.setDirty();
     queueSettingsSave(false, true, false, false);
 }
@@ -504,7 +506,7 @@ void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
     volume_ = config_.volumeLevels[volumeLevelIndex_];
     config_.speakerVolume = volume_;
     volumeOverlayUntilMs_ = millis() + 2000;
-    speaker_.setVolume(volume_);
+    speaker_.setVolume(effectiveSpeakerVolume());
     display_.setDirty();
     queueSettingsSave(false, true, false, false);
 }
@@ -531,9 +533,42 @@ void AIAvatar::toggleMicMuted() {
     queueSettingsSave(false, false, true, false);
 }
 
+void AIAvatar::setSpeakerMuted(bool muted) {
+    if (speakerMuted_ == muted) return;
+    resetSleepTimer("speaker mute");
+    speakerMuted_ = muted;
+    if (speakerReady_) speaker_.setVolume(effectiveSpeakerVolume());
+    if (speakerMuted_) cancelPlayback();
+    display_.setDirty();
+    queueSettingsSave(false, true, false, false);
+}
+
+void AIAvatar::toggleSpeakerMuted() {
+    setSpeakerMuted(!speakerMuted_);
+}
+
 void AIAvatar::cycleVolume() {
     if (config_.volumeLevelCount == 0) return;
     setVolumeLevel((volumeLevelIndex_ + 1) % config_.volumeLevelCount);
+}
+
+bool AIAvatar::cancelPlayback() {
+    bool active = serverProcessing_;
+    if (speakerReady_) {
+        active = active || playbackActive_ || speaker_.isPlaying() || speaker_.queuedSamples() > 0;
+    }
+    if (!active) return false;
+
+    resetSleepTimer("playback cancel");
+    if (speakerReady_) speaker_.requestImmediateStop();
+    serverProcessing_ = false;
+    visualEffects_.setProcessing(false);
+    visualEffects_.clearToolPulse();
+    wsStopPending_ = true;
+    if (config_.fastStartup) heavyDeferredResumeMs_ = millis() + 500;
+    display_.setDirty();
+    Serial.println("[AIAvatar] playback cancel");
+    return true;
 }
 
 bool AIAvatar::startPushToTalk() {
@@ -989,6 +1024,7 @@ void AIAvatar::updateStatusOverlay() {
 
     StatusOverlayState state = {};
     state.micMuted = micMuted_ && !pushToTalkActive_;
+    state.speakerMuted = speakerMuted_;
     state.volumeVisible = nowMs < volumeOverlayUntilMs_;
     state.volumeLevelCount = config_.volumeLevelCount;
     state.volumeLevel = volumeLevelIndex_;
@@ -1126,6 +1162,10 @@ void AIAvatar::loadPersistedSettings() {
         micMuted_ = prefs.getBool(kPrefsMicMutedKey, micMuted_);
         restored = true;
     }
+    if (prefs.isKey(kPrefsSpeakerMutedKey)) {
+        speakerMuted_ = prefs.getBool(kPrefsSpeakerMutedKey, speakerMuted_);
+        restored = true;
+    }
     if (prefs.isKey(kPrefsWifiIndexKey)) {
         uint8_t index = prefs.getUChar(kPrefsWifiIndexKey, kNoWifiNetworkIndex);
         if (index < config_.wifiNetworkCount && config_.wifiNetworks[index].ssid[0]) {
@@ -1141,9 +1181,10 @@ void AIAvatar::loadPersistedSettings() {
     prefs.end();
 
     if (restored) {
-        Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s wifi=%u\n",
+        Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s speaker=%s wifi=%u\n",
                       config_.displayBrightness, config_.speakerVolume,
-                      micMuted_ ? "muted" : "on", activeWifiNetworkIndex_);
+                      micMuted_ ? "muted" : "on", speakerMuted_ ? "muted" : "on",
+                      activeWifiNetworkIndex_);
     }
 }
 
@@ -1175,6 +1216,7 @@ void AIAvatar::updatePersistedSettings() {
     }
     if (volumeSettingDirty_) {
         prefs.putUChar(kPrefsSpeakerVolumeKey, volume_);
+        prefs.putBool(kPrefsSpeakerMutedKey, speakerMuted_);
     }
     if (micSettingDirty_) {
         prefs.putBool(kPrefsMicMutedKey, micMuted_);
@@ -1226,6 +1268,10 @@ uint8_t AIAvatar::nearestVolumeLevel(uint8_t volume) const {
     return bestIndex;
 }
 
+uint8_t AIAvatar::effectiveSpeakerVolume() const {
+    return speakerMuted_ ? 0 : volume_;
+}
+
 bool AIAvatar::readMicFrameStatic(int16_t* dest, void* context) {
     auto* self = static_cast<AIAvatar*>(context);
     return self && self->mic_.dequeueFrame(dest);
@@ -1240,6 +1286,14 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
     if (!s_instance || !s_instance->serverProcessing_) return;
     if (!s_instance->speakerReady_) return;
     SpeakerOutput& speaker = s_instance->speaker_;
+    if (s_instance->speakerMuted_) {
+        if (chunk.pcmData && chunk.pcmSamples > 0) {
+            s_instance->visualEffects_.setProcessing(false);
+            s_instance->visualEffects_.clearToolPulse();
+            s_instance->display_.setDirty();
+        }
+        return;
+    }
     if (chunk.faceName) {
         uint32_t durationMs = chunk.faceDurationSec > 0.0f
                                   ? static_cast<uint32_t>(chunk.faceDurationSec * 1000.0f)
@@ -1265,7 +1319,10 @@ void AIAvatar::onFinalStatic() {
     s_instance->visualEffects_.clearToolPulse();
     s_instance->display_.setDirty();
     if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
-    if (s_instance->speakerReady_) s_instance->speaker_.enqueueEnd();
+    if (s_instance->speakerReady_ && !s_instance->speakerMuted_ &&
+        (s_instance->speaker_.queuedSamples() > 0 || s_instance->speaker_.isPlaying())) {
+        s_instance->speaker_.enqueueEnd();
+    }
 }
 
 void AIAvatar::onFinalTextStatic(const char* responseText, const char* voiceText) {
@@ -1280,7 +1337,13 @@ void AIAvatar::onStopStatic() {
     s_instance->visualEffects_.clearToolPulse();
     s_instance->display_.setDirty();
     if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
-    if (s_instance->speakerReady_) s_instance->speaker_.enqueueStop();
+    if (s_instance->speakerReady_) {
+        if (s_instance->speaker_.queuedSamples() > 0 || s_instance->speaker_.isPlaying()) {
+            s_instance->speaker_.enqueueStop();
+        } else {
+            s_instance->speaker_.clearQueue();
+        }
+    }
 }
 
 void AIAvatar::onProcessingStatic(bool processing) {

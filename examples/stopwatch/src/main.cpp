@@ -48,9 +48,11 @@ static void configureStopWatchDisplay() {
     avatar.statusOverlay().setMicBounds({w / 2 - 72, 28, 36, 36});
     avatar.statusOverlay().setNetworkBounds({w / 2 - 18, 28, 36, 36});
     avatar.statusOverlay().setBatteryBounds({w / 2 + 36, 28, 36, 36});
+    avatar.statusOverlay().setSpeakerBounds({w / 2 + 90, 28, 36, 36});
     avatar.statusOverlay().setMicTapBounds({w / 2 - 94, 16, 62, 62});
     avatar.statusOverlay().setNetworkTapBounds({w / 2 - 31, 16, 62, 62});
     avatar.statusOverlay().setBatteryTapBounds({w / 2 + 32, 16, 62, 62});
+    avatar.statusOverlay().setSpeakerTapBounds({w / 2 + 76, 16, 62, 62});
     avatar.statusOverlay().setIconSize(42);
     avatar.statusOverlay().setWifiStrokeRadius(1);
     avatar.statusOverlay().setVolumeTapBounds({(w - 120) / 2, h - 96, 120, 64});

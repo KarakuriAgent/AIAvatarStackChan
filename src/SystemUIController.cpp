@@ -276,8 +276,12 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
             break;
         case SettingsItem::Speaker: {
             label = "スピーカー";
-            uint8_t pct = byteToPercent(avatar_->currentVolume());
-            snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(pct));
+            if (avatar_->isSpeakerMuted()) {
+                snprintf(value, sizeof(value), "ミュート");
+            } else {
+                uint8_t pct = byteToPercent(avatar_->currentVolume());
+                snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(pct));
+            }
             break;
         }
         case SettingsItem::WiFi:
@@ -586,6 +590,14 @@ void SystemUIController::runButtonAction(ButtonId id) {
 }
 
 void SystemUIController::handleTap(int16_t x, int16_t y) {
+    if (!settingsOpen_ && uiVisible_ && statusOverlay_->speakerBounds().contains(x, y)) {
+        avatar_->toggleSpeakerMuted();
+        return;
+    }
+    if (avatar_->cancelPlayback()) {
+        return;
+    }
+
     if (settingsOpen_) {
         handleSettingsTap(x, y);
         return;

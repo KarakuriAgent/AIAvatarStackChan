@@ -18,6 +18,7 @@ struct UiRect {
 
 struct StatusOverlayState {
     bool micMuted;
+    bool speakerMuted;
     bool volumeVisible;
     uint8_t volumeLevel;
     uint8_t volumeLevelCount;
@@ -41,6 +42,7 @@ struct StatusOverlayLayout {
     uint8_t wifiStrokeRadius;
     UiRect volumeTapBounds;
     int16_t volumeIndicatorX;
+    UiRect speakerBounds;
 };
 
 class StatusOverlay {
@@ -51,13 +53,21 @@ public:
     bool enabled() const { return enabled_; }
     bool update(const StatusOverlayState& state);
     void draw(LGFX_Sprite* canvas) const;
-    void setLayout(const StatusOverlayLayout& layout) { layout_ = layout; }
+    void setLayout(const StatusOverlayLayout& layout) {
+        layout_ = layout;
+        if (!customMicTapBounds_) micTapBounds_ = layout_.micBounds;
+        if (!customNetworkTapBounds_) networkTapBounds_ = layout_.networkBounds;
+        if (!customBatteryTapBounds_) batteryTapBounds_ = layout_.batteryBounds;
+        if (!customSpeakerTapBounds_) speakerTapBounds_ = layout_.speakerBounds;
+    }
     void setClockPosition(int16_t x, int16_t y, textdatum_t datum = top_left);
     void setClockTextSize(uint8_t size) { layout_.clockTextSize = size; }
     void setMicBounds(UiRect bounds);
+    void setSpeakerBounds(UiRect bounds);
     void setNetworkBounds(UiRect bounds);
     void setBatteryBounds(UiRect bounds);
     void setMicTapBounds(UiRect bounds);
+    void setSpeakerTapBounds(UiRect bounds);
     void setNetworkTapBounds(UiRect bounds);
     void setBatteryTapBounds(UiRect bounds);
     void setIconSize(uint8_t size) { layout_.iconSize = size; }
@@ -66,6 +76,7 @@ public:
     void setVolumeIndicatorX(int16_t x) { layout_.volumeIndicatorX = x; }
     const StatusOverlayLayout& layout() const { return layout_; }
     UiRect micBounds() const { return customMicTapBounds_ ? micTapBounds_ : layout_.micBounds; }
+    UiRect speakerBounds() const { return customSpeakerTapBounds_ ? speakerTapBounds_ : layout_.speakerBounds; }
     UiRect networkBounds() const { return customNetworkTapBounds_ ? networkTapBounds_ : layout_.networkBounds; }
     UiRect batteryBounds() const { return customBatteryTapBounds_ ? batteryTapBounds_ : layout_.batteryBounds; }
     UiRect volumeTapBounds() const { return layout_.volumeTapBounds; }
@@ -76,9 +87,11 @@ private:
     StatusOverlayState state_;
     StatusOverlayLayout layout_;
     UiRect micTapBounds_;
+    UiRect speakerTapBounds_;
     UiRect networkTapBounds_;
     UiRect batteryTapBounds_;
     bool customMicTapBounds_;
+    bool customSpeakerTapBounds_;
     bool customNetworkTapBounds_;
     bool customBatteryTapBounds_;
 
@@ -87,6 +100,7 @@ private:
     void drawBatteryIcon(LGFX_Sprite* canvas, int8_t level, bool charging) const;
     void drawWiFiIcon(LGFX_Sprite* canvas, bool wifiConnected, bool wsConnected) const;
     void drawMicIcon(LGFX_Sprite* canvas, bool muted) const;
+    void drawSpeakerIcon(LGFX_Sprite* canvas, bool muted) const;
     void drawVolumeIndicator(LGFX_Sprite* canvas, uint8_t level, uint8_t levelCount) const;
 };
 

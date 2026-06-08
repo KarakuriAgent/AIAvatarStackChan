@@ -17,11 +17,14 @@ StatusOverlay::StatusOverlay()
               28,
               0,
               {0, 190, 72, 50},
-              5},
+              5,
+              {216, 8, 37, 37}},
       micTapBounds_(layout_.micBounds),
+      speakerTapBounds_(layout_.speakerBounds),
       networkTapBounds_(layout_.networkBounds),
       batteryTapBounds_(layout_.batteryBounds),
       customMicTapBounds_(false),
+      customSpeakerTapBounds_(false),
       customNetworkTapBounds_(false),
       customBatteryTapBounds_(false) {}
 
@@ -36,6 +39,7 @@ void StatusOverlay::draw(LGFX_Sprite* canvas) const {
     if (!enabled_ || !hasState_ || !canvas) return;
 
     drawClock(canvas, state_.hour, state_.minute);
+    drawSpeakerIcon(canvas, state_.speakerMuted);
     drawMicIcon(canvas, state_.micMuted);
     drawWiFiIcon(canvas, state_.wifiConnected, state_.websocketConnected);
     if (layout_.batteryBounds.w > 0 && layout_.batteryBounds.h > 0) {
@@ -48,6 +52,7 @@ void StatusOverlay::draw(LGFX_Sprite* canvas) const {
 
 bool StatusOverlay::equals(const StatusOverlayState& a, const StatusOverlayState& b) {
     return a.micMuted == b.micMuted &&
+           a.speakerMuted == b.speakerMuted &&
            a.volumeVisible == b.volumeVisible &&
            a.volumeLevel == b.volumeLevel &&
            a.volumeLevelCount == b.volumeLevelCount &&
@@ -70,6 +75,11 @@ void StatusOverlay::setMicBounds(UiRect bounds) {
     if (!customMicTapBounds_) micTapBounds_ = bounds;
 }
 
+void StatusOverlay::setSpeakerBounds(UiRect bounds) {
+    layout_.speakerBounds = bounds;
+    if (!customSpeakerTapBounds_) speakerTapBounds_ = bounds;
+}
+
 void StatusOverlay::setNetworkBounds(UiRect bounds) {
     layout_.networkBounds = bounds;
     if (!customNetworkTapBounds_) networkTapBounds_ = bounds;
@@ -83,6 +93,11 @@ void StatusOverlay::setBatteryBounds(UiRect bounds) {
 void StatusOverlay::setMicTapBounds(UiRect bounds) {
     micTapBounds_ = bounds;
     customMicTapBounds_ = true;
+}
+
+void StatusOverlay::setSpeakerTapBounds(UiRect bounds) {
+    speakerTapBounds_ = bounds;
+    customSpeakerTapBounds_ = true;
 }
 
 void StatusOverlay::setNetworkTapBounds(UiRect bounds) {
@@ -132,6 +147,47 @@ void StatusOverlay::drawMicIcon(LGFX_Sprite* canvas, bool muted) const {
     canvas->drawFastVLine(cx, cy + s / 4, std::max(1, s * 3 / 28), color);
     canvas->drawFastHLine(cx - s * 3 / 28, cy + s * 5 / 14, s / 4, color);
     if (muted) {
+        canvas->drawLine(x + s / 7, y + s * 6 / 7, x + s * 6 / 7, y + s / 7, TFT_WHITE);
+        canvas->drawLine(x + s / 7 + 1, y + s * 6 / 7, x + s * 6 / 7 + 1, y + s / 7, TFT_WHITE);
+    }
+}
+
+void StatusOverlay::drawSpeakerIcon(LGFX_Sprite* canvas, bool muted) const {
+    UiRect bounds = layout_.speakerBounds;
+    if (bounds.w <= 0 || bounds.h <= 0) return;
+
+    const int s = layout_.iconSize;
+    const int x = bounds.x + (bounds.w - s) / 2;
+    const int y = bounds.y + (bounds.h - s) / 2;
+    const int cy = y + s / 2;
+    const int hornX = x + s * 11 / 28;
+
+    canvas->fillRoundRect(x, y, s, s, std::max(1, s * 3 / 14), 0x2104);
+    uint16_t color = muted ? TFT_WHITE : TFT_GREEN;
+
+    canvas->fillRect(x + s * 4 / 28, cy - s * 4 / 28, s * 5 / 28, s * 8 / 28, color);
+    canvas->fillTriangle(x + s * 8 / 28, cy - s * 4 / 28,
+                         hornX, y + s * 6 / 28,
+                         hornX, y + s * 22 / 28, color);
+
+    if (!muted) {
+        const int waveCx = x + s * 13 / 28;
+        const int stroke = std::max(1, s / 28);
+        for (int a = -38; a <= 38; ++a) {
+            float rad = a * 3.14159f / 180.0f;
+            int px = waveCx + static_cast<int>(s * 6 / 28 * cosf(rad));
+            int py = cy + static_cast<int>(s * 6 / 28 * sinf(rad));
+            if (stroke > 1) canvas->fillCircle(px, py, stroke, color);
+            else canvas->drawPixel(px, py, color);
+        }
+        for (int a = -38; a <= 38; ++a) {
+            float rad = a * 3.14159f / 180.0f;
+            int px = waveCx + static_cast<int>(s * 10 / 28 * cosf(rad));
+            int py = cy + static_cast<int>(s * 10 / 28 * sinf(rad));
+            if (stroke > 1) canvas->fillCircle(px, py, stroke, color);
+            else canvas->drawPixel(px, py, color);
+        }
+    } else {
         canvas->drawLine(x + s / 7, y + s * 6 / 7, x + s * 6 / 7, y + s / 7, TFT_WHITE);
         canvas->drawLine(x + s / 7 + 1, y + s * 6 / 7, x + s * 6 / 7 + 1, y + s / 7, TFT_WHITE);
     }

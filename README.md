@@ -115,6 +115,7 @@ Build and upload the firmware. Once StackChan boots and the 🛜Wi-Fi icon turns
 Here are the default controls built into the firmware.
 
 - 🎙️ Toggles mute/unmute. While muted, long-press the screen to use push-to-talk.
+- 🔊 Toggles speaker mute/unmute. Tapping the screen during speech playback cancels the current playback.
 - 🛜 Opens the Wi-Fi network picker and lets you toggle the WebSocket connection on/off.
 - 🔈 No visible button, but tapping the lower-left corner of the screen cycles through speaker volume levels.
 - 👀 Say something like "look at this" and StackChan will automatically snap a photo, send it to the server, and respond based on what it sees.
@@ -480,7 +481,7 @@ graph TD;
 | `MotionController` | Drives StackChan head motion and nade motion sequences. |
 | `LedController` | Drives StackChan LED feedback. |
 | `SystemUIController` | Handles virtual buttons, Wi-Fi selection UI, and built-in button actions. |
-| `StatusOverlay` | Draws connection, Wi-Fi, battery, volume, and microphone status. |
+| `StatusOverlay` | Draws connection, Wi-Fi, battery, volume, microphone, and speaker status. |
 | `VisualEffects` | Draws transient UI effects such as voice detection. |
 | `SleepManager` | Manages idle sleep, display dimming, Wi-Fi sleep/off behavior, wake handling, and WebSocket reconnect after wake. |
 | `CameraController` | Captures camera images for vision requests. |

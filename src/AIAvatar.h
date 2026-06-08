@@ -41,7 +41,10 @@ public:
     void setDisplayBrightness(uint8_t brightness);
     void setMicMuted(bool muted);
     void toggleMicMuted();
+    void setSpeakerMuted(bool muted);
+    void toggleSpeakerMuted();
     void cycleVolume();
+    bool cancelPlayback();
     bool startPushToTalk();
     void endPushToTalk();
     void sendStop();
@@ -72,6 +75,7 @@ public:
 
     bool isConnected() const { return ws_.isConnected(); }
     bool isMicMuted() const { return micMuted_; }
+    bool isSpeakerMuted() const { return speakerMuted_; }
     bool isServerProcessing() const { return serverProcessing_; }
     bool isPushToTalkActive() const { return pushToTalkActive_; }
     bool isSleeping() const { return sleepManager_.isSleeping(); }
@@ -130,6 +134,7 @@ private:
     ResourceProvider defaultResources_;
 
     volatile bool micMuted_;
+    volatile bool speakerMuted_;
     volatile bool serverProcessing_;
     volatile bool wsConnectPending_;
     volatile bool wsDisconnectPending_;
@@ -221,6 +226,7 @@ private:
     void updatePersistedSettings();
     uint8_t findConfiguredWifiNetworkIndex() const;
     uint8_t nearestVolumeLevel(uint8_t volume) const;
+    uint8_t effectiveSpeakerVolume() const;
     bool hasSpeech(const int16_t* samples, size_t sampleCount) const;
     static bool readMicFrameStatic(int16_t* dest, void* context);
     static void clearMicFramesStatic(void* context);
