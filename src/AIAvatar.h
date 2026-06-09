@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "ScreenRenderer.h"
 #include "FaceController.h"
+#include "IdleMotionEstimator.h"
 #include "LedController.h"
 #include "MotionController.h"
 #include "OpenClawEffects.h"
@@ -43,6 +44,16 @@ public:
     void toggleMicMuted();
     void setSpeakerMuted(bool muted);
     void toggleSpeakerMuted();
+    void setIdleMotionEnabled(bool enabled);
+    void toggleIdleMotionEnabled();
+    void setIdleMotionIntervalSeconds(uint8_t seconds);
+    void setIdleMotionType(IdleMotionType type);
+    void cycleIdleMotionType();
+    void setIdleAnimationEnabled(bool enabled) { setIdleMotionEnabled(enabled); }
+    void toggleIdleAnimationEnabled() { toggleIdleMotionEnabled(); }
+    void setIdleAnimationIntervalSeconds(uint8_t seconds) {
+        setIdleMotionIntervalSeconds(seconds);
+    }
     void cycleVolume();
     bool cancelPlayback();
     bool startPushToTalk();
@@ -76,6 +87,11 @@ public:
     bool isConnected() const { return ws_.isConnected(); }
     bool isMicMuted() const { return micMuted_; }
     bool isSpeakerMuted() const { return speakerMuted_; }
+    bool idleMotionEnabled() const { return config_.idleMotionEnabled; }
+    uint8_t idleMotionIntervalSeconds() const { return config_.idleMotionIntervalSeconds; }
+    IdleMotionType idleMotionType() const { return config_.idleMotionType; }
+    bool idleAnimationEnabled() const { return idleMotionEnabled(); }
+    uint8_t idleAnimationIntervalSeconds() const { return idleMotionIntervalSeconds(); }
     bool isServerProcessing() const { return serverProcessing_; }
     bool isPushToTalkActive() const { return pushToTalkActive_; }
     bool isSleeping() const { return sleepManager_.isSleeping(); }
@@ -159,6 +175,7 @@ private:
     bool volumeSettingDirty_;
     bool micSettingDirty_;
     bool wifiSettingDirty_;
+    bool idleMotionSettingDirty_;
     uint32_t settingsSaveDueMs_;
     int8_t batteryLevel_;
     bool batteryCharging_;
@@ -179,6 +196,8 @@ private:
     size_t visionPreviewJpgLen_;
     uint32_t visionPreviewUntilMs_;
     SemaphoreHandle_t visionPreviewMutex_;
+    IdleAudioAccumulator idleAudioAccumulator_;
+    uint32_t nextIdleMotionMs_;
 
     TaskHandle_t micTaskHandle_;
     TaskHandle_t speakerTaskHandle_;
@@ -222,7 +241,7 @@ private:
     void drawVisionPreview(LGFX_Sprite* canvas);
     void logMemoryUsage(const char* label) const;
     void loadPersistedSettings();
-    void queueSettingsSave(bool brightness, bool volume, bool mic, bool wifi);
+    void queueSettingsSave(bool brightness, bool volume, bool mic, bool wifi, bool idleMotion);
     void updatePersistedSettings();
     uint8_t findConfiguredWifiNetworkIndex() const;
     uint8_t nearestVolumeLevel(uint8_t volume) const;

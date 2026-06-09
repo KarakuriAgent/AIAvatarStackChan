@@ -17,9 +17,13 @@ public:
     bool begin();
     void end();
     bool read(int16_t* dest, size_t sampleCount);
+    bool readStereo(int16_t* dest, size_t frameCount);
     bool enqueueFrame(const int16_t* samples);
     bool dequeueFrame(int16_t* dest);
     void clearQueue();
+
+    static void downmixStereoToMono(const int16_t* stereoSamples, int16_t* monoSamples,
+                                    size_t frameCount);
 
     uint32_t sampleRate() const { return sampleRate_; }
     size_t bufferSamples() const { return bufferSamples_; }

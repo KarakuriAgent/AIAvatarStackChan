@@ -1,6 +1,7 @@
 #include "SystemUIController.h"
 
 #include "AIAvatar.h"
+#include "IdleMotionEstimator.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -40,6 +41,16 @@ int clampPercent(int value) {
     if (value < 0) return 0;
     if (value > 100) return 100;
     return value;
+}
+
+const char* idleMotionTypeLabel(IdleMotionType type) {
+    switch (type) {
+        case IdleMotionType::Random:
+            return "ランダム";
+        case IdleMotionType::StereoBalance:
+        default:
+            return "左右差";
+    }
 }
 
 }  // namespace
@@ -191,6 +202,9 @@ void SystemUIController::drawSettings(LGFX_Sprite* canvas) const {
         case SettingsView::WiFi:
             drawWifiSettings(canvas);
             break;
+        case SettingsView::IdleMotion:
+            drawIdleMotionSettings(canvas);
+            break;
         case SettingsView::Version:
             drawVersionSettings(canvas);
             break;
@@ -293,6 +307,12 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
                 snprintf(value, sizeof(value), "未接続");
             }
             break;
+        case SettingsItem::IdleMotion:
+            label = "待機モーション";
+            snprintf(value, sizeof(value), "%s %s",
+                     avatar_->idleMotionEnabled() ? "オン" : "オフ",
+                     idleMotionTypeLabel(avatar_->idleMotionType()));
+            break;
         case SettingsItem::Version:
             label = "バージョン";
             copyTruncated(value, sizeof(value), avatar_->firmwareVersion(), 18);
@@ -331,6 +351,69 @@ void SystemUIController::drawBrightnessSettings(LGFX_Sprite* canvas) const {
 
 void SystemUIController::drawSpeakerSettings(LGFX_Sprite* canvas) const {
     drawStepper(canvas, byteToPercent(avatar_->currentVolume()), 0, 100, "%");
+}
+
+void SystemUIController::drawIdleMotionSettings(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    UiRect row = idleMotionToggleBounds();
+    canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
+    canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
+                          row.w - kSettingsRowPaddingX * 2, 0x3186);
+
+    const char* label = "有効";
+    const char* value = avatar_->idleMotionEnabled() ? "オン" : "オフ";
+    canvas->setFont(&fonts::lgfxJapanGothic_20);
+    canvas->setTextSize(1);
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextDatum(top_left);
+    int labelY = row.y + (row.h - canvas->fontHeight()) / 2;
+    canvas->drawString(label, row.x + kSettingsRowPaddingX, labelY);
+
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextColor(0xC618);
+    int valueW = canvas->textWidth(value);
+    int valueY = row.y + (row.h - canvas->fontHeight()) / 2;
+    canvas->drawString(value, row.x + row.w - kSettingsRowPaddingX - valueW, valueY);
+
+    UiRect typeRow = idleMotionTypeBounds();
+    canvas->fillRect(typeRow.x, typeRow.y, typeRow.w, typeRow.h, 0x0841);
+    canvas->drawFastHLine(typeRow.x + kSettingsRowPaddingX, typeRow.y + typeRow.h - 1,
+                          typeRow.w - kSettingsRowPaddingX * 2, 0x3186);
+
+    const char* typeLabel = "タイプ";
+    const char* typeValue = idleMotionTypeLabel(avatar_->idleMotionType());
+    canvas->setFont(&fonts::lgfxJapanGothic_20);
+    canvas->setTextColor(TFT_WHITE);
+    int typeLabelY = typeRow.y + (typeRow.h - canvas->fontHeight()) / 2;
+    canvas->drawString(typeLabel, typeRow.x + kSettingsRowPaddingX, typeLabelY);
+
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextColor(0xC618);
+    int typeValueW = canvas->textWidth(typeValue);
+    int typeValueY = typeRow.y + (typeRow.h - canvas->fontHeight()) / 2;
+    canvas->drawString(typeValue, typeRow.x + typeRow.w - kSettingsRowPaddingX - typeValueW,
+                       typeValueY);
+
+    char valueText[32];
+    snprintf(valueText, sizeof(valueText), "%u秒",
+             avatar_->idleMotionIntervalSeconds());
+    canvas->setFont(&fonts::lgfxJapanGothic_36);
+    canvas->setTextSize(1);
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextDatum(top_center);
+    int valueTextY = typeRow.y + typeRow.h + 4;
+    canvas->drawString(valueText, canvas->width() / 2, valueTextY);
+
+    char rangeText[32];
+    snprintf(rangeText, sizeof(rangeText), "%u - %u秒",
+             kIdleMotionIntervalMinSeconds, kIdleMotionIntervalMaxSeconds);
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextColor(0xC618);
+    canvas->drawString(rangeText, canvas->width() / 2, valueTextY + 48);
+
+    drawAdjustButton(canvas, decrementButtonBounds(), '-');
+    drawAdjustButton(canvas, incrementButtonBounds(), '+');
 }
 
 void SystemUIController::drawWifiSettings(LGFX_Sprite* canvas) const {
@@ -532,6 +615,13 @@ void SystemUIController::drawSettingsIcon(LGFX_Sprite* canvas, SettingsItem item
             canvas->drawLine(cx + 3, y + 11, cx + 6, y + 13, color);
             canvas->fillCircle(cx, y + 18, 2, color);
             break;
+        case SettingsItem::IdleMotion:
+            canvas->drawCircle(cx, cy, s / 3, color);
+            canvas->drawLine(cx, cy, cx + 7, cy - 6, color);
+            canvas->drawLine(cx, cy, cx - 6, cy + 5, color);
+            canvas->drawTriangle(cx + 8, cy - 9, cx + 8, cy - 3, cx + 13, cy - 6, color);
+            canvas->fillTriangle(cx - 8, cy + 9, cx - 8, cy + 3, cx - 13, cy + 6, color);
+            break;
         case SettingsItem::Version:
             canvas->drawRoundRect(x + 4, y + 3, s - 8, s - 6, 3, color);
             canvas->setFont(&fonts::Font2);
@@ -658,7 +748,8 @@ void SystemUIController::updateHold(const m5::touch_detail_t& detail) {
 
 bool SystemUIController::updateSettingsHold(const m5::touch_detail_t& detail) {
     if (!settingsOpen_ || !avatar_) return false;
-    if (settingsView_ != SettingsView::Brightness && settingsView_ != SettingsView::Speaker) {
+    if (settingsView_ != SettingsView::Brightness && settingsView_ != SettingsView::Speaker &&
+        settingsView_ != SettingsView::IdleMotion) {
         settingsHoldActive_ = false;
         settingsHoldTarget_ = HoldTarget::None;
         return false;
@@ -744,6 +835,7 @@ void SystemUIController::openSettings() {
     settingsScrollOffset_ = 0;
     settingsHoldActive_ = false;
     settingsHoldTarget_ = HoldTarget::None;
+    avatar_->motion().goHome();
     avatar_->display().setDirty();
 }
 
@@ -873,6 +965,9 @@ void SystemUIController::handleSettingsTap(int16_t x, int16_t y) {
         case SettingsView::WiFi:
             handleWifiTap(x, y);
             break;
+        case SettingsView::IdleMotion:
+            handleIdleMotionTap(x, y);
+            break;
         case SettingsView::Version:
             handleVersionTap(x, y);
             break;
@@ -909,6 +1004,18 @@ void SystemUIController::handleWifiTap(int16_t x, int16_t y) {
     if (index < 0) return;
     avatar_->switchWiFi(static_cast<uint8_t>(index));
     avatar_->display().setDirty();
+}
+
+void SystemUIController::handleIdleMotionTap(int16_t x, int16_t y) {
+    if (idleMotionToggleBounds().contains(x, y)) {
+        avatar_->toggleIdleMotionEnabled();
+    } else if (idleMotionTypeBounds().contains(x, y)) {
+        avatar_->cycleIdleMotionType();
+    } else if (decrementButtonBounds().contains(x, y)) {
+        adjustIdleMotionInterval(-1);
+    } else if (incrementButtonBounds().contains(x, y)) {
+        adjustIdleMotionInterval(1);
+    }
 }
 
 void SystemUIController::handleVersionTap(int16_t x, int16_t y) {
@@ -953,6 +1060,9 @@ void SystemUIController::runSettingsAction(uint8_t index) {
             settingsView_ = SettingsView::WiFi;
             wifiScrollOffset_ = 0;
             break;
+        case SettingsItem::IdleMotion:
+            settingsView_ = SettingsView::IdleMotion;
+            break;
         case SettingsItem::Version:
             settingsView_ = SettingsView::Version;
             break;
@@ -983,6 +1093,11 @@ void SystemUIController::adjustSpeakerVolume(int8_t delta) {
     avatar_->setVolume(percentToByte(static_cast<uint8_t>(pct)));
 }
 
+void SystemUIController::adjustIdleMotionInterval(int8_t delta) {
+    int seconds = static_cast<int>(avatar_->idleMotionIntervalSeconds()) + delta;
+    avatar_->setIdleMotionIntervalSeconds(clampIdleMotionIntervalSeconds(seconds));
+}
+
 void SystemUIController::adjustHoldTarget(HoldTarget target, int8_t delta) {
     switch (target) {
         case HoldTarget::Brightness:
@@ -990,6 +1105,9 @@ void SystemUIController::adjustHoldTarget(HoldTarget target, int8_t delta) {
             break;
         case HoldTarget::Speaker:
             adjustSpeakerVolume(delta);
+            break;
+        case HoldTarget::IdleMotionInterval:
+            adjustIdleMotionInterval(delta);
             break;
         case HoldTarget::None:
         default:
@@ -1010,6 +1128,7 @@ SystemUIController::HoldTarget SystemUIController::holdTargetAt(int16_t x, int16
 
     if (settingsView_ == SettingsView::Brightness) return HoldTarget::Brightness;
     if (settingsView_ == SettingsView::Speaker) return HoldTarget::Speaker;
+    if (settingsView_ == SettingsView::IdleMotion) return HoldTarget::IdleMotionInterval;
     delta = 0;
     return HoldTarget::None;
 }
@@ -1026,6 +1145,14 @@ UiRect SystemUIController::incrementButtonBounds() const {
     int y = displayH - kSettingsStepperButtonSize - 24;
     return {static_cast<int16_t>(displayW - 30 - kSettingsStepperButtonSize),
             static_cast<int16_t>(y), kSettingsStepperButtonSize, kSettingsStepperButtonSize};
+}
+
+UiRect SystemUIController::idleMotionToggleBounds() const {
+    return settingsItemBounds(0);
+}
+
+UiRect SystemUIController::idleMotionTypeBounds() const {
+    return settingsItemBounds(1);
 }
 
 uint8_t SystemUIController::menuItemCount() const {
@@ -1151,6 +1278,8 @@ const char* SystemUIController::settingsTitle() const {
             return "スピーカー";
         case SettingsView::WiFi:
             return "Wi-Fi";
+        case SettingsView::IdleMotion:
+            return "待機モーション";
         case SettingsView::Version:
             return "バージョン";
     }

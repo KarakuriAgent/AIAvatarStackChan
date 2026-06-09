@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "HardwareAdapter.h"
+#include "IdleMotionEstimator.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,7 @@ public:
     bool isNadeActive() const { return nadeActive_; }
 
     void move(int16_t yaw, int16_t pitch, uint16_t speed);
+    bool moveIdleTarget(int16_t yaw, int16_t pitch, uint16_t speed = 450);
     void goHome(uint16_t speed = 500);
 
     int16_t pitchHome() const { return pitchHome_; }

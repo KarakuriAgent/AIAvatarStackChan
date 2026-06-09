@@ -60,6 +60,21 @@ bool MicrophoneInput::read(int16_t* dest, size_t sampleCount) {
     return M5.Mic.record(dest, sampleCount, sampleRate_);
 }
 
+bool MicrophoneInput::readStereo(int16_t* dest, size_t frameCount) {
+    if (!running_ || !dest || frameCount == 0) return false;
+    return M5.Mic.record(dest, frameCount * 2, sampleRate_, true);
+}
+
+void MicrophoneInput::downmixStereoToMono(const int16_t* stereoSamples, int16_t* monoSamples,
+                                          size_t frameCount) {
+    if (!stereoSamples || !monoSamples) return;
+    for (size_t i = 0; i < frameCount; ++i) {
+        int32_t left = stereoSamples[i * 2];
+        int32_t right = stereoSamples[i * 2 + 1];
+        monoSamples[i] = static_cast<int16_t>((left + right) / 2);
+    }
+}
+
 bool MicrophoneInput::enqueueFrame(const int16_t* samples) {
     if (!queue_ || !dropBuf_ || !samples) return false;
     if (xQueueSend(queue_, samples, 0) == pdTRUE) return true;

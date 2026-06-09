@@ -21,6 +21,9 @@ constexpr const char* kPrefsSpeakerVolumeKey = "spk_vol";
 constexpr const char* kPrefsMicMutedKey = "mic_mute";
 constexpr const char* kPrefsSpeakerMutedKey = "spk_mute";
 constexpr const char* kPrefsWifiIndexKey = "wifi_idx";
+constexpr const char* kPrefsIdleMotionEnabledKey = "idle_en";
+constexpr const char* kPrefsIdleMotionIntervalKey = "idle_int";
+constexpr const char* kPrefsIdleMotionTypeKey = "idle_type";
 constexpr uint8_t kNoWifiNetworkIndex = 0xff;
 constexpr uint32_t kSettingsSaveDebounceMs = 700;
 
@@ -55,6 +58,7 @@ AIAvatar::AIAvatar()
       volumeSettingDirty_(false),
       micSettingDirty_(false),
       wifiSettingDirty_(false),
+      idleMotionSettingDirty_(false),
       settingsSaveDueMs_(0),
       batteryLevel_(-1),
       batteryCharging_(false),
@@ -75,6 +79,8 @@ AIAvatar::AIAvatar()
       visionPreviewJpgLen_(0),
       visionPreviewUntilMs_(0),
       visionPreviewMutex_(nullptr),
+      idleAudioAccumulator_{},
+      nextIdleMotionMs_(0),
       micTaskHandle_(nullptr),
       speakerTaskHandle_(nullptr),
       wsTaskHandle_(nullptr),
@@ -114,6 +120,8 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     defaultResources_ = resources;
     config_ = config;
     loadPersistedSettings();
+    idleAudioAccumulator_.reset();
+    nextIdleMotionMs_ = 0;
     otaUpdater_.begin(config_);
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
     volume_ = config_.speakerVolume;
@@ -326,7 +334,7 @@ void AIAvatar::update() {
         deferredImagesLogged_ = true;
         logMemoryUsage("after deferred images");
     }
-    motion_.update(playbackActive_);
+    motion_.update(playbackActive_ && !systemUI_.settingsOpen());
     leds_.update();
     openClaw_.update();
     if (visualEffects_.update()) {
@@ -495,7 +503,7 @@ void AIAvatar::setVolume(uint8_t volume) {
     volumeOverlayUntilMs_ = millis() + 2000;
     speaker_.setVolume(effectiveSpeakerVolume());
     display_.setDirty();
-    queueSettingsSave(false, true, false, false);
+    queueSettingsSave(false, true, false, false, false);
 }
 
 void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
@@ -508,7 +516,7 @@ void AIAvatar::setVolumeLevel(uint8_t levelIndex) {
     volumeOverlayUntilMs_ = millis() + 2000;
     speaker_.setVolume(effectiveSpeakerVolume());
     display_.setDirty();
-    queueSettingsSave(false, true, false, false);
+    queueSettingsSave(false, true, false, false, false);
 }
 
 void AIAvatar::setDisplayBrightness(uint8_t brightness) {
@@ -516,21 +524,21 @@ void AIAvatar::setDisplayBrightness(uint8_t brightness) {
     config_.displayBrightness = brightness;
     M5.Display.setBrightness(brightness);
     display_.setDirty();
-    queueSettingsSave(true, false, false, false);
+    queueSettingsSave(true, false, false, false, false);
 }
 
 void AIAvatar::setMicMuted(bool muted) {
     resetSleepTimer("mic mute");
     micMuted_ = muted;
     display_.setDirty();
-    queueSettingsSave(false, false, true, false);
+    queueSettingsSave(false, false, true, false, false);
 }
 
 void AIAvatar::toggleMicMuted() {
     resetSleepTimer("mic mute");
     micMuted_ = !micMuted_;
     display_.setDirty();
-    queueSettingsSave(false, false, true, false);
+    queueSettingsSave(false, false, true, false, false);
 }
 
 void AIAvatar::setSpeakerMuted(bool muted) {
@@ -540,11 +548,55 @@ void AIAvatar::setSpeakerMuted(bool muted) {
     if (speakerReady_) speaker_.setVolume(effectiveSpeakerVolume());
     if (speakerMuted_) cancelPlayback();
     display_.setDirty();
-    queueSettingsSave(false, true, false, false);
+    queueSettingsSave(false, true, false, false, false);
 }
 
 void AIAvatar::toggleSpeakerMuted() {
     setSpeakerMuted(!speakerMuted_);
+}
+
+void AIAvatar::setIdleMotionEnabled(bool enabled) {
+    if (config_.idleMotionEnabled == enabled) return;
+    resetSleepTimer("idle motion");
+    config_.idleMotionEnabled = enabled;
+    idleAudioAccumulator_.reset();
+    nextIdleMotionMs_ = 0;
+    if (!enabled) {
+        motion_.goHome();
+    }
+    display_.setDirty();
+    queueSettingsSave(false, false, false, false, true);
+}
+
+void AIAvatar::toggleIdleMotionEnabled() {
+    setIdleMotionEnabled(!config_.idleMotionEnabled);
+}
+
+void AIAvatar::setIdleMotionIntervalSeconds(uint8_t seconds) {
+    uint8_t clamped = clampIdleMotionIntervalSeconds(seconds);
+    if (config_.idleMotionIntervalSeconds == clamped) return;
+    resetSleepTimer("idle motion interval");
+    config_.idleMotionIntervalSeconds = clamped;
+    nextIdleMotionMs_ = 0;
+    display_.setDirty();
+    queueSettingsSave(false, false, false, false, true);
+}
+
+void AIAvatar::setIdleMotionType(IdleMotionType type) {
+    if (config_.idleMotionType == type) return;
+    resetSleepTimer("idle motion type");
+    config_.idleMotionType = type;
+    idleAudioAccumulator_.reset();
+    nextIdleMotionMs_ = 0;
+    motion_.goHome();
+    display_.setDirty();
+    queueSettingsSave(false, false, false, false, true);
+}
+
+void AIAvatar::cycleIdleMotionType() {
+    setIdleMotionType(config_.idleMotionType == IdleMotionType::StereoBalance
+                          ? IdleMotionType::Random
+                          : IdleMotionType::StereoBalance);
 }
 
 void AIAvatar::cycleVolume() {
@@ -673,16 +725,58 @@ void AIAvatar::wsTaskFunc(void* params) {
 }
 
 void AIAvatar::runMicCapture() {
+    static int16_t stereoBuf[kMicBufferSamplesMax * 2];
     static int16_t micBuf[kMicBufferSamplesMax];
     uint32_t lastSpeechDetectedMs = 0;
 
     for (;;) {
         if (playbackActive_) {
+            idleAudioAccumulator_.reset();
+            nextIdleMotionMs_ = 0;
             delay(1);
             continue;
         }
 
-        if (mic_.read(micBuf, config_.micBufferSamples)) {
+        if (mic_.readStereo(stereoBuf, config_.micBufferSamples)) {
+            MicrophoneInput::downmixStereoToMono(stereoBuf, micBuf, config_.micBufferSamples);
+
+            uint32_t now = millis();
+            bool idleMotionAllowed = config_.idleMotionEnabled && !serverProcessing_ &&
+                                     !pushToTalkActive_ && !pttSendPending_ &&
+                                     !systemUI_.settingsOpen() &&
+                                     !motion_.isNadeActive();
+            if (idleMotionAllowed) {
+                if (idleMotionCooldownReady(now, nextIdleMotionMs_)) {
+                    if (config_.idleMotionType == IdleMotionType::Random) {
+                        IdleMotionTarget target =
+                            randomIdleMotionTarget(config_.pitchHome, esp_random());
+                        if (target.active && motion_.moveIdleTarget(target.yaw, target.pitch, 450)) {
+                            scheduleNextIdleMotion(now, config_.idleMotionIntervalSeconds,
+                                                   true, esp_random(), nextIdleMotionMs_);
+                        } else {
+                            nextIdleMotionMs_ = 0;
+                        }
+                    } else {
+                        idleAudioAccumulator_.reset();
+                        if (addIdleStereoFrame(idleAudioAccumulator_, stereoBuf,
+                                               config_.micBufferSamples, config_.vadThresholdDb)) {
+                            IdleMotionTarget target =
+                                estimateIdleMotionTarget(idleAudioAccumulator_, config_.pitchHome);
+                            if (target.active && motion_.moveIdleTarget(target.yaw, target.pitch, 450)) {
+                                scheduleNextIdleMotion(now, config_.idleMotionIntervalSeconds,
+                                                       false, 0, nextIdleMotionMs_);
+                            }
+                            idleAudioAccumulator_.reset();
+                        }
+                    }
+                } else {
+                    idleAudioAccumulator_.reset();
+                }
+            } else {
+                idleAudioAccumulator_.reset();
+                nextIdleMotionMs_ = 0;
+            }
+
             if (pushToTalkActive_) {
                 if (hasSpeech(micBuf, config_.micBufferSamples)) {
                     if (visualEffects_.showVoiceDetected(350)) {
@@ -708,7 +802,6 @@ void AIAvatar::runMicCapture() {
             }
 
             if (!micMuted_ && ws_.isConnected() && !serverProcessing_) {
-                uint32_t now = millis();
                 if (hasSpeech(micBuf, config_.micBufferSamples)) {
                     if (visualEffects_.showVoiceDetected(350)) {
                         display_.setDirty();
@@ -997,7 +1090,7 @@ void AIAvatar::updateWifiSwitch() {
         strlcpy(config_.wifiPass, network.pass, sizeof(config_.wifiPass));
         wifiSwitching_ = false;
         activeWifiNetworkIndex_ = pendingWifiIndex_;
-        queueSettingsSave(false, false, false, true);
+        queueSettingsSave(false, false, false, true, false);
         wsConnectPending_ = true;
         wifiConnectedLogged_ = true;
         Serial.printf("[AIAvatar] WiFi connected to %s ip=%s\n",
@@ -1166,6 +1259,25 @@ void AIAvatar::loadPersistedSettings() {
         speakerMuted_ = prefs.getBool(kPrefsSpeakerMutedKey, speakerMuted_);
         restored = true;
     }
+    if (prefs.isKey(kPrefsIdleMotionEnabledKey)) {
+        config_.idleMotionEnabled =
+            prefs.getBool(kPrefsIdleMotionEnabledKey, config_.idleMotionEnabled);
+        restored = true;
+    }
+    if (prefs.isKey(kPrefsIdleMotionIntervalKey)) {
+        config_.idleMotionIntervalSeconds = clampIdleMotionIntervalSeconds(
+            prefs.getUChar(kPrefsIdleMotionIntervalKey,
+                           config_.idleMotionIntervalSeconds));
+        restored = true;
+    }
+    if (prefs.isKey(kPrefsIdleMotionTypeKey)) {
+        uint8_t type = prefs.getUChar(kPrefsIdleMotionTypeKey,
+                                      static_cast<uint8_t>(config_.idleMotionType));
+        if (type <= static_cast<uint8_t>(IdleMotionType::Random)) {
+            config_.idleMotionType = static_cast<IdleMotionType>(type);
+        }
+        restored = true;
+    }
     if (prefs.isKey(kPrefsWifiIndexKey)) {
         uint8_t index = prefs.getUChar(kPrefsWifiIndexKey, kNoWifiNetworkIndex);
         if (index < config_.wifiNetworkCount && config_.wifiNetworks[index].ssid[0]) {
@@ -1181,25 +1293,30 @@ void AIAvatar::loadPersistedSettings() {
     prefs.end();
 
     if (restored) {
-        Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s speaker=%s wifi=%u\n",
+        Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s speaker=%s wifi=%u idleMotion=%s/%u/%us\n",
                       config_.displayBrightness, config_.speakerVolume,
                       micMuted_ ? "muted" : "on", speakerMuted_ ? "muted" : "on",
-                      activeWifiNetworkIndex_);
+                      activeWifiNetworkIndex_,
+                      config_.idleMotionEnabled ? "on" : "off",
+                      static_cast<unsigned>(config_.idleMotionType),
+                      config_.idleMotionIntervalSeconds);
     }
 }
 
-void AIAvatar::queueSettingsSave(bool brightness, bool volume, bool mic, bool wifi) {
-    if (!brightness && !volume && !mic && !wifi) return;
+void AIAvatar::queueSettingsSave(bool brightness, bool volume, bool mic, bool wifi,
+                                 bool idleMotion) {
+    if (!brightness && !volume && !mic && !wifi && !idleMotion) return;
     brightnessSettingDirty_ = brightnessSettingDirty_ || brightness;
     volumeSettingDirty_ = volumeSettingDirty_ || volume;
     micSettingDirty_ = micSettingDirty_ || mic;
     wifiSettingDirty_ = wifiSettingDirty_ || wifi;
+    idleMotionSettingDirty_ = idleMotionSettingDirty_ || idleMotion;
     settingsSaveDueMs_ = millis() + kSettingsSaveDebounceMs;
 }
 
 void AIAvatar::updatePersistedSettings() {
     if (!brightnessSettingDirty_ && !volumeSettingDirty_ && !micSettingDirty_ &&
-        !wifiSettingDirty_) {
+        !wifiSettingDirty_ && !idleMotionSettingDirty_) {
         return;
     }
     if (static_cast<int32_t>(millis() - settingsSaveDueMs_) < 0) return;
@@ -1224,12 +1341,19 @@ void AIAvatar::updatePersistedSettings() {
     if (wifiSettingDirty_ && activeWifiNetworkIndex_ != kNoWifiNetworkIndex) {
         prefs.putUChar(kPrefsWifiIndexKey, activeWifiNetworkIndex_);
     }
+    if (idleMotionSettingDirty_) {
+        prefs.putBool(kPrefsIdleMotionEnabledKey, config_.idleMotionEnabled);
+        prefs.putUChar(kPrefsIdleMotionIntervalKey,
+                       config_.idleMotionIntervalSeconds);
+        prefs.putUChar(kPrefsIdleMotionTypeKey, static_cast<uint8_t>(config_.idleMotionType));
+    }
     prefs.end();
 
     brightnessSettingDirty_ = false;
     volumeSettingDirty_ = false;
     micSettingDirty_ = false;
     wifiSettingDirty_ = false;
+    idleMotionSettingDirty_ = false;
     settingsSaveDueMs_ = 0;
     Serial.println("[Settings] NVS saved");
 }

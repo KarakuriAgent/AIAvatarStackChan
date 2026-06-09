@@ -66,8 +66,8 @@ bool StackChanHardware::begin() {
     M5StackChan.Motion.setAutoAngleSyncEnabled(autoAngleSyncEnabled_);
     active_ = true;
     directScs_ = false;
-    Serial.printf("[StackChan] hardware initialized autoAngleSync=%d\n",
-                  autoAngleSyncEnabled_ ? 1 : 0);
+    Serial.printf("[StackChan] hardware initialized autoAngleSync=%d yawOffset=%d\n",
+                  autoAngleSyncEnabled_ ? 1 : 0, servoYawOffsetDegree_);
     return true;
 #else
     active_ = false;
@@ -77,6 +77,8 @@ bool StackChanHardware::begin() {
 }
 
 bool StackChanHardware::begin(const Config& config) {
+    pitchHome_ = config.pitchHome;
+    servoYawOffsetDegree_ = config.servoYawOffsetDegree;
     if (isDirectScsType(config.servoType)) {
         return beginDirectScs(config);
     }
@@ -128,8 +130,9 @@ void StackChanHardware::update() {
 
 void StackChanHardware::moveMotion(int16_t yaw, int16_t pitch, uint16_t speed) {
     if (!active_) return;
+    int16_t adjustedYaw = applyYawOffset(yaw);
     if (directScs_) {
-        int16_t yawDegree = kScsHomeDegree + servoYawOffsetDegree_ + yaw / 6;
+        int16_t yawDegree = kScsHomeDegree + adjustedYaw / 6;
         yawDegree = constrain(yawDegree, kScsHomeDegree - kScsYawLimitDegree,
                               kScsHomeDegree + kScsYawLimitDegree);
 
@@ -143,12 +146,20 @@ void StackChanHardware::moveMotion(int16_t yaw, int16_t pitch, uint16_t speed) {
         return;
     }
 #if AIAVATAR_HAS_M5STACKCHAN
-    M5StackChan.Motion.move(yaw, pitch, speed);
+    M5StackChan.Motion.move(adjustedYaw, pitch, speed);
 #else
     (void)yaw;
+    (void)adjustedYaw;
     (void)pitch;
     (void)speed;
 #endif
+}
+
+int16_t StackChanHardware::applyYawOffset(int16_t yaw) const {
+    static constexpr int16_t kYawLimit = kScsYawLimitDegree * 6;
+    int32_t adjusted = static_cast<int32_t>(yaw) +
+                       static_cast<int32_t>(servoYawOffsetDegree_) * 6;
+    return static_cast<int16_t>(constrain(adjusted, -kYawLimit, kYawLimit));
 }
 
 bool StackChanHardware::consumeNadeEvent() {

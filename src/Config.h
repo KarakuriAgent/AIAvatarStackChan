@@ -20,6 +20,11 @@ enum class SleepWifiMode : uint8_t {
     Off,
 };
 
+enum class IdleMotionType : uint8_t {
+    StereoBalance = 0,
+    Random,
+};
+
 struct WifiNetworkConfig {
     char ssid[64];
     char pass[64];
@@ -81,6 +86,9 @@ struct Config {
     SleepWifiMode sleepWifiMode;
     bool statusOverlayEnabled;
     uint32_t visionPreviewDurationMs;
+    bool idleMotionEnabled;
+    uint8_t idleMotionIntervalSeconds;
+    IdleMotionType idleMotionType;
     RgbColor acceptedLedColor;
     RgbColor toolLedColor;
     uint8_t pttMaxSeconds;

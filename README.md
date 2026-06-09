@@ -166,6 +166,9 @@ Here are the default controls built into the firmware.
 - `sleep_wifi_mode` (string): default sleep Wi-Fi behavior. `sleep` keeps Wi-Fi associated with modem sleep; `off` powers Wi-Fi down and reconnects on wake
 - `status_overlay_enabled` (boolean): whether to show the status overlay
 - `vision_preview_duration_ms` (number): camera preview duration for vision requests in ms. Default: `2000`
+- `idle_motion_enabled` (boolean): whether to run idle motion while StackChan is idle
+- `idle_motion_interval_seconds` (number): idle motion interval setting in seconds. For `stereo_balance` this is the fixed update interval; for `random` each next motion is scheduled randomly from 0 to this value. 1 to 30. Default: `5`
+- `idle_motion_type` (string): idle motion type. `stereo_balance` turns left/right from the stereo microphone balance; `random` looks in random safe directions. Default: `stereo_balance`
 - `accepted_led_color` (array): RGB color for the accepted-state LED. Example: `[0, 168, 0]`
 - `tool_led_color` (array): RGB color for the tool-running LED. Example: `[140, 0, 140]`
 - `ptt_max_seconds` (number): maximum Push-to-Talk recording length in seconds

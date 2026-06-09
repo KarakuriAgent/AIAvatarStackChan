@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "IdleMotionEstimator.h"
 #include "ResourceProvider.h"
 
 #include <Arduino.h>
@@ -29,6 +30,26 @@ SleepWifiMode parseSleepWifiMode(const char* value, SleepWifiMode fallback) {
         return SleepWifiMode::Sleep;
     }
     return fallback;
+}
+
+IdleMotionType parseIdleMotionType(const char* value, IdleMotionType fallback) {
+    if (!value || !value[0]) return fallback;
+    if (strcasecmp(value, "stereo_balance") == 0 || strcasecmp(value, "stereo") == 0 ||
+        strcasecmp(value, "balance") == 0 || strcasecmp(value, "sound") == 0) {
+        return IdleMotionType::StereoBalance;
+    }
+    if (strcasecmp(value, "random") == 0) return IdleMotionType::Random;
+    return fallback;
+}
+
+const char* idleMotionTypeLogName(IdleMotionType type) {
+    switch (type) {
+        case IdleMotionType::Random:
+            return "random";
+        case IdleMotionType::StereoBalance:
+        default:
+            return "stereo_balance";
+    }
 }
 
 }  // namespace
@@ -63,6 +84,9 @@ Config::Config()
       sleepWifiMode(SleepWifiMode::Sleep),
       statusOverlayEnabled(true),
       visionPreviewDurationMs(2000),
+      idleMotionEnabled(true),
+      idleMotionIntervalSeconds(5),
+      idleMotionType(IdleMotionType::StereoBalance),
       acceptedLedColor{0, 168, 0},
       toolLedColor{140, 0, 140},
       pttMaxSeconds(30),
@@ -210,6 +234,13 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
         parseSleepWifiMode(doc["sleep_wifi_mode"] | "", config.sleepWifiMode);
     config.statusOverlayEnabled = doc["status_overlay_enabled"] | config.statusOverlayEnabled;
     config.visionPreviewDurationMs = doc["vision_preview_duration_ms"] | config.visionPreviewDurationMs;
+    config.idleMotionEnabled =
+        doc["idle_motion_enabled"] | (doc["idle_animation_enabled"] | config.idleMotionEnabled);
+    config.idleMotionIntervalSeconds = clampIdleMotionIntervalSeconds(
+        doc["idle_motion_interval_seconds"] |
+        (doc["idle_animation_interval_seconds"] | config.idleMotionIntervalSeconds));
+    config.idleMotionType = parseIdleMotionType(doc["idle_motion_type"] | "",
+                                                config.idleMotionType);
     loadRgbColor(doc, "accepted_led_color", config.acceptedLedColor);
     loadRgbColor(doc, "tool_led_color", config.toolLedColor);
     config.pttMaxSeconds = doc["ptt_max_seconds"] | config.pttMaxSeconds;
@@ -234,9 +265,12 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
 
     Serial.printf("[Config] WS: %s:%u%s user=%s\n",
                   config.wsHost, config.wsPort, config.wsPath, config.userId);
-    Serial.printf("[Config] mic=%uHz/%u samples speakerVol=%u normalizePeak=%.2f maxGain=%.1f\n",
+    Serial.printf("[Config] mic=%uHz/%u samples speakerVol=%u normalizePeak=%.2f maxGain=%.1f idleMotion=%s/%s/%us\n",
                   config.micSampleRate, config.micBufferSamples, config.speakerVolume,
-                  config.audioNormalizeTargetPeak, config.audioNormalizeMaxGain);
+                  config.audioNormalizeTargetPeak, config.audioNormalizeMaxGain,
+                  config.idleMotionEnabled ? "on" : "off",
+                  idleMotionTypeLogName(config.idleMotionType),
+                  config.idleMotionIntervalSeconds);
     return true;
 }
 

@@ -37,6 +37,7 @@ private:
     int16_t servoYawOffsetDegree_;
 
     bool beginDirectScs(const Config& config);
+    int16_t applyYawOffset(int16_t yaw) const;
     void writeScsPosition(uint8_t id, uint16_t position, uint16_t timeMs, uint16_t speed);
     uint16_t degreeToScsPosition(int16_t degree) const;
 };

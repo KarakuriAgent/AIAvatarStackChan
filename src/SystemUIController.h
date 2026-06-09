@@ -63,6 +63,7 @@ private:
         Mic,
         Speaker,
         WiFi,
+        IdleMotion,
         Version,
         Count,
     };
@@ -72,6 +73,7 @@ private:
         Brightness,
         Speaker,
         WiFi,
+        IdleMotion,
         Version,
     };
 
@@ -79,6 +81,7 @@ private:
         None = 0,
         Brightness,
         Speaker,
+        IdleMotionInterval,
     };
 
     AIAvatar* avatar_;
@@ -165,13 +168,17 @@ private:
     void handleBrightnessTap(int16_t x, int16_t y);
     void handleSpeakerTap(int16_t x, int16_t y);
     void handleWifiTap(int16_t x, int16_t y);
+    void handleIdleMotionTap(int16_t x, int16_t y);
     void handleVersionTap(int16_t x, int16_t y);
     void adjustBrightness(int8_t delta);
     void adjustSpeakerVolume(int8_t delta);
+    void adjustIdleMotionInterval(int8_t delta);
     void adjustHoldTarget(HoldTarget target, int8_t delta);
     HoldTarget holdTargetAt(int16_t x, int16_t y, int8_t& delta) const;
     UiRect decrementButtonBounds() const;
     UiRect incrementButtonBounds() const;
+    UiRect idleMotionToggleBounds() const;
+    UiRect idleMotionTypeBounds() const;
     uint8_t visibleWifiRows() const;
     uint8_t wifiItemCount() const;
     UiRect wifiItemBounds(uint8_t visibleIndex) const;
@@ -187,6 +194,7 @@ private:
     void drawBrightnessSettings(LGFX_Sprite* canvas) const;
     void drawSpeakerSettings(LGFX_Sprite* canvas) const;
     void drawWifiSettings(LGFX_Sprite* canvas) const;
+    void drawIdleMotionSettings(LGFX_Sprite* canvas) const;
     void drawVersionSettings(LGFX_Sprite* canvas) const;
     void drawStepper(LGFX_Sprite* canvas, int value, int minValue, int maxValue, const char* unit) const;
     void drawAdjustButton(LGFX_Sprite* canvas, UiRect bounds, char symbol) const;

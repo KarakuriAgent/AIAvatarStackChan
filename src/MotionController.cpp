@@ -109,6 +109,17 @@ void MotionController::move(int16_t yaw, int16_t pitch, uint16_t speed) {
     hardware_->moveMotion(yaw, pitch, speed);
 }
 
+bool MotionController::moveIdleTarget(int16_t yaw, int16_t pitch, uint16_t speed) {
+    if (!enabled_ || !hardware_ || nadeActive_) return false;
+    yaw = clampIdleMotionYaw(yaw);
+    pitch = clampIdleMotionPitch(pitchHome_, pitch);
+    pendingStop_ = false;
+    lastYaw_ = yaw;
+    lastPitch_ = static_cast<int16_t>(pitch - pitchHome_);
+    move(yaw, pitch, speed);
+    return true;
+}
+
 void MotionController::goHome(uint16_t speed) {
     move(0, pitchHome_, speed);
 }
