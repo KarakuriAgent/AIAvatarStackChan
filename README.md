@@ -135,7 +135,7 @@ Supported initial action types:
 
 Actions run in the order listed. Unknown action types are skipped, so future firmware can add handlers without breaking existing configs.
 
-To update local tools without rewriting the SD card, package a tool SD-root directory and serve a tool manifest from the OTA server. `build_ota.sh` bakes both the firmware and tool manifest URLs into the firmware from `OTA_PUBLIC_BASE_URL`; `config.json` can still override them with `ota_manifest_url` and `tool_manifest_url`. The tool updater uses the same `ota_api_key` and `ota_ca_cert` as firmware OTA.
+To update local tools without rewriting the SD card, package a tool SD-root directory and serve a tool manifest from the OTA server. `build_ota.sh` bakes both the firmware and tool manifest URLs into the firmware from `OTA_PUBLIC_BASE_URL`; `config.json` can still override them with `ota_manifest_url` and `tool_manifest_url`. The tool updater uses the same `ota_api_key` as firmware OTA. Firmware and tool manifests must be signed with the OTA signing key bundled into the firmware as `/ota_trust.json`.
 
 ```json
 {
@@ -154,7 +154,7 @@ examples/ota_server/stage_tools.sh
 The script reads `TOOL_SOURCE_DIR`, `OTA_PUBLIC_BASE_URL`, and `OTA_ROOT` from
 `examples/ota_server/.env` when present. It creates `/tools/tools.zip` and
 `/tools/manifest.json` under the OTA root. The ZIP is store-only and expands to
-the SD card root on the device after manifest size/SHA-256 verification.
+the SD card root on the device after manifest signature and size/SHA-256 verification.
 
 
 ## ⚙️ Configuration
@@ -174,7 +174,6 @@ the SD card root on the device after manifest size/SHA-256 verification.
 - `ota_manifest_url` (string): firmware OTA manifest URL
 - `tool_manifest_url` (string): local SD tool update manifest URL
 - `ota_api_key` (string): Bearer token used for firmware and tool update downloads
-- `ota_ca_cert` (string): optional CA certificate for OTA HTTPS requests. If empty, the updater uses insecure TLS mode
 - `timezone` (string): TZ string used for NTP time configuration
 - `mic_sample_rate` (number): microphone input sample rate
 - `mic_magnification` (number): microphone input gain setting

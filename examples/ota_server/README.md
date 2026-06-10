@@ -4,15 +4,35 @@ Small authenticated OTA server for AIAvatarStackChan firmware and tool updates.
 Run it behind Cloudflare HTTPS. The device accesses the Cloudflare HTTPS URL,
 while this local server can stay plain HTTP behind the tunnel/proxy.
 
+OTA authenticity is checked with signed firmware and tool manifests. The HTTPS
+certificate is not the trust root for updates; the firmware verifies manifest
+signatures with the public key bundled as `/ota_trust.json`.
+
+## Signing Key
+
+Create one ES256 signing key and keep it out of `dist/`:
+
+```sh
+mkdir -p examples/ota_server/secrets
+openssl ecparam -genkey -name prime256v1 -noout \
+  -out examples/ota_server/secrets/ota_signing_private_key.pem
+```
+
+`examples/ota_server/secrets/` is ignored by git. The build scripts use
+`OTA_SIGNING_KEY` and `OTA_SIGNATURE_KEY_ID` from `.env` when set, otherwise
+`secrets/ota_signing_private_key.pem` and `main-2026`.
+
 ## Build and Stage OTA Release
 
 ```sh
 examples/ota_server/build_ota.sh
 ```
 
-By default, this generates a timestamp version like `20260606-153012`, builds
-`examples/stackchan/basic`, copies `firmware.bin` to `examples/ota_server/dist`,
-and writes `manifest.json` with the same version. You can override values:
+By default, this generates a timestamp version like `20260606-153012`, writes
+`src/FirmwareInfoGenerated.h`, generates `private/firmware_assets/sdroot/ota_trust.json`
+from the signing key, builds `examples/stackchan/basic`, copies `firmware.bin`
+to `examples/ota_server/dist`, and writes signed `manifest.json` with the same
+version. You can override values:
 
 ```sh
 examples/ota_server/build_ota.sh \
@@ -21,9 +41,7 @@ examples/ota_server/build_ota.sh \
   --base-url https://ota.example.com/
 ```
 
-The script also writes `src/FirmwareInfoGenerated.h`, which is ignored by git,
-so the version shown on the device matches the generated manifest. The same
-generated header bakes these default update URLs into the firmware:
+The generated header bakes these default update URLs into the firmware:
 
 ```text
 <OTA_PUBLIC_BASE_URL>/manifest.json
@@ -31,9 +49,9 @@ generated header bakes these default update URLs into the firmware:
 ```
 
 `config.json` can still override them with `ota_manifest_url` and
-`tool_manifest_url`.
+`tool_manifest_url`. Manifest signatures still have to verify.
 
-## Generate manifest only
+## Generate Manifest Only
 
 ```sh
 python3 examples/ota_server/generate_manifest.py \
@@ -41,13 +59,15 @@ python3 examples/ota_server/generate_manifest.py \
   --version 0.1.1 \
   --release-date 2026-06-06 \
   --base-url https://ota.example.com/ \
+  --signing-key examples/ota_server/secrets/ota_signing_private_key.pem \
+  --signature-key-id main-2026 \
   --output examples/ota_server/dist/manifest.json
 cp examples/stackchan/basic/.pio/build/cores3/firmware.bin examples/ota_server/dist/firmware.bin
 ```
 
 ## Stage Tool Release
 
-Tool updates use the same server and Bearer token, but a separate endpoint:
+Tool updates use the same server, Bearer token, and signing key, but a separate endpoint:
 
 ```text
 /tools/manifest.json
@@ -62,14 +82,14 @@ examples/ota_server/stage_tools.sh
 
 By default, `stage_tools.sh` uses `TOOL_SOURCE_DIR` from `.env`, or the first
 existing directory containing `tools.json` from `private/tool_assets/sdroot`,
-and `sdcard`. It uses `OTA_PUBLIC_BASE_URL` and `OTA_ROOT` from `.env`, so an
-already running server will serve the newly staged files as soon as they are
-written.
+and `sdcard`. It uses `OTA_PUBLIC_BASE_URL`, `OTA_ROOT`, `OTA_SIGNING_KEY`, and
+`OTA_SIGNATURE_KEY_ID` from `.env`, so an already running server will serve the
+newly staged files as soon as they are written.
 
 The script creates a store-only ZIP archive so the firmware can extract it
-without a deflate library. The device downloads `/tools/tools.zip`, verifies
-size and SHA-256 from `/tools/manifest.json`, validates the packaged
-`tools.json`, then expands the package to the SD card root.
+without a deflate library. The device downloads `/tools/manifest.json`, verifies
+its signature, downloads `/tools/tools.zip`, verifies size and SHA-256, validates
+the packaged `tools.json`, then expands the package to the SD card root.
 
 ## Serve
 

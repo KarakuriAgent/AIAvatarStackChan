@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Config.h"
+#include "OtaTrust.h"
 
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -28,6 +29,9 @@ struct OtaManifest {
     char firmwareUrl[256];
     char sha256[65];
     size_t size;
+    char signatureKeyId[32];
+    char signatureAlg[16];
+    char signature[256];
 };
 
 class OtaUpdater {
@@ -39,7 +43,7 @@ public:
 
     OtaUpdater();
 
-    void begin(const Config& config);
+    void begin(const Config& config, const OtaTrust* trust = nullptr);
     bool checkForUpdate();
     bool startUpdate();
     bool consumeChanged();
@@ -54,7 +58,6 @@ public:
 private:
     char manifestUrl_[256];
     char apiKey_[160];
-    char caCert_[2048];
     OtaManifest manifest_;
     char statusMessage_[128];
     volatile OtaUpdateStatus status_;
@@ -62,6 +65,7 @@ private:
     volatile bool updateAvailable_;
     volatile bool changed_;
     TaskHandle_t taskHandle_;
+    const OtaTrust* trust_;
 
     bool startTask(Operation operation);
     static void taskEntry(void* arg);

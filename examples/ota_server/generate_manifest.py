@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from urllib.parse import urljoin
 
+from manifest_signing import add_manifest_signature
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -26,6 +28,8 @@ def main() -> int:
     parser.add_argument("--base-url", required=True, help="Public HTTPS base URL, e.g. https://ota.example.com/")
     parser.add_argument("--firmware-name", default="firmware.bin", help="Published firmware file name")
     parser.add_argument("--release-date", default=dt.date.today().isoformat())
+    parser.add_argument("--signing-key", type=Path, help="ES256 private key for manifest signing")
+    parser.add_argument("--signature-key-id", help="Signing key identifier stored in the manifest")
     parser.add_argument("--output", type=Path, default=Path("manifest.json"))
     args = parser.parse_args()
 
@@ -41,6 +45,15 @@ def main() -> int:
         "size": firmware.stat().st_size,
         "sha256": sha256_file(firmware),
     }
+    if args.signing_key or args.signature_key_id:
+        if not args.signing_key or not args.signature_key_id:
+            raise SystemExit("--signing-key and --signature-key-id must be used together")
+        add_manifest_signature(
+            manifest,
+            kind="firmware",
+            private_key=args.signing_key.resolve(),
+            key_id=args.signature_key_id,
+        )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

@@ -26,6 +26,7 @@ public:
 
     bool exists(const char* path) const;
     bool readBytes(const char* path, uint8_t** out, size_t* len) const;
+    bool readBuiltinBytes(const char* path, uint8_t** out, size_t* len) const;
     bool loadConfig(Config& config, const char* path = "/config.json") const;
 
 private:

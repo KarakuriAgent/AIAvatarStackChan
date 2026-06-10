@@ -52,7 +52,6 @@ struct Config {
     char otaManifestUrl[256];
     char toolManifestUrl[256];
     char otaApiKey[160];
-    char otaCaCert[2048];
     WifiNetworkConfig wifiNetworks[kMaxWifiNetworks];
     uint8_t wifiNetworkCount;
 

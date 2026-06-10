@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include "OtaUpdater.h"
+#include "OtaTrust.h"
 
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -18,6 +19,9 @@ struct ToolManifest {
     char toolsUrl[256];
     char sha256[65];
     size_t size;
+    char signatureKeyId[32];
+    char signatureAlg[16];
+    char signature[256];
 };
 
 class ToolUpdater {
@@ -29,7 +33,7 @@ public:
 
     ToolUpdater();
 
-    void begin(const Config& config, const char* outputPath = "/tools.json",
+    void begin(const Config& config, const OtaTrust* trust = nullptr, const char* outputPath = "/tools.json",
                const char* versionPath = "/tools.version.json");
     bool checkForUpdate();
     bool startUpdate();
@@ -46,7 +50,6 @@ public:
 private:
     char manifestUrl_[256];
     char apiKey_[160];
-    char caCert_[2048];
     char outputPath_[64];
     char versionPath_[64];
     char localVersion_[32];
@@ -57,6 +60,7 @@ private:
     volatile bool updateAvailable_;
     volatile bool changed_;
     TaskHandle_t taskHandle_;
+    const OtaTrust* trust_;
 
     bool startTask(Operation operation);
     static void taskEntry(void* arg);

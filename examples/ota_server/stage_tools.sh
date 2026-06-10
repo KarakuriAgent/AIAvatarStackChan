@@ -4,13 +4,14 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$SCRIPT_DIR/.env"
+SIGNING_KEY_DEFAULT="$SCRIPT_DIR/secrets/ota_signing_private_key.pem"
 
 usage() {
   cat <<'EOF'
 Usage: examples/ota_server/stage_tools.sh [--source-dir DIR] [--version VERSION] [--base-url URL] [--release-date YYYY-MM-DD]
 
 Packages the tool SD-root directory as tools.zip, writes it into the OTA root's
-tools directory, and generates tools/manifest.json for the existing OTA server.
+tools directory, and generates signed tools/manifest.json for the existing OTA server.
 
 Defaults:
   SOURCE DIR   TOOL_SOURCE_DIR from examples/ota_server/.env, or the first
@@ -21,6 +22,8 @@ Defaults:
   RELEASE_DATE current local date as YYYY-MM-DD
   OTA ROOT     OTA_ROOT from examples/ota_server/.env, or dist
   BASE URL     OTA_PUBLIC_BASE_URL from examples/ota_server/.env, or https://ota.example.com/
+  SIGNING KEY  OTA_SIGNING_KEY from examples/ota_server/.env, or secrets/ota_signing_private_key.pem
+  KEY ID       OTA_SIGNATURE_KEY_ID from examples/ota_server/.env, or main-2026
 EOF
 }
 
@@ -62,6 +65,8 @@ SOURCE_DIR=""
 VERSION="${TOOL_VERSION:-}"
 RELEASE_DATE="${TOOL_RELEASE_DATE:-}"
 BASE_URL="${OTA_PUBLIC_BASE_URL:-}"
+SIGNING_KEY="${OTA_SIGNING_KEY:-$SIGNING_KEY_DEFAULT}"
+SIGNATURE_KEY_ID="${OTA_SIGNATURE_KEY_ID:-main-2026}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -104,6 +109,8 @@ SOURCE_DIR="${SOURCE_DIR:-${TOOL_SOURCE_DIR:-}}"
 VERSION="${VERSION:-${TOOL_VERSION:-}}"
 RELEASE_DATE="${RELEASE_DATE:-${TOOL_RELEASE_DATE:-}}"
 BASE_URL="${BASE_URL:-${OTA_PUBLIC_BASE_URL:-https://ota.example.com/}}"
+SIGNING_KEY="${OTA_SIGNING_KEY:-$SIGNING_KEY}"
+SIGNATURE_KEY_ID="${OTA_SIGNATURE_KEY_ID:-$SIGNATURE_KEY_ID}"
 DIST_DIR=$(resolve_dist_dir)
 
 if [[ -z "$SOURCE_DIR" ]]; then
@@ -130,6 +137,13 @@ if [[ ! "$BASE_URL" =~ ^https:// ]]; then
   echo "OTA public base URL must start with https://: $BASE_URL"
   exit 1
 fi
+if [[ ! -f "$SIGNING_KEY" ]]; then
+  echo "OTA signing key not found: $SIGNING_KEY"
+  echo "Create one with:"
+  echo "  mkdir -p $SCRIPT_DIR/secrets"
+  echo "  openssl ecparam -genkey -name prime256v1 -noout -out $SIGNING_KEY"
+  exit 1
+fi
 
 TOOLS_DIR="$DIST_DIR/tools"
 mkdir -p "$TOOLS_DIR"
@@ -140,7 +154,9 @@ python3 "$SCRIPT_DIR/package_tools.py" \
   --manifest "$TOOLS_DIR/manifest.json" \
   --version "$VERSION" \
   --release-date "$RELEASE_DATE" \
-  --base-url "$BASE_URL"
+  --base-url "$BASE_URL" \
+  --signing-key "$SIGNING_KEY" \
+  --signature-key-id "$SIGNATURE_KEY_ID"
 
 echo "Tool package staged:"
 echo "  source: $SOURCE_DIR"

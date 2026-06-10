@@ -1,0 +1,9 @@
+{
+  "ota_signing_public_keys": [
+    {
+      "id": "main-2026",
+      "alg": "es256",
+      "public_key": "BASE64_DER_SUBJECT_PUBLIC_KEY_INFO"
+    }
+  ]
+}

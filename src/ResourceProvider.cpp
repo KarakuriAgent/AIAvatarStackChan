@@ -47,6 +47,14 @@ bool ResourceProvider::readBytes(const char* path, uint8_t** out, size_t* len) c
     return false;
 }
 
+bool ResourceProvider::readBuiltinBytes(const char* path, uint8_t** out, size_t* len) const {
+    if (!out || !len) return false;
+    *out = nullptr;
+    *len = 0;
+    const BuiltinAsset* asset = findBuiltinAsset(path);
+    return asset && readBuiltinBytes(*asset, out, len);
+}
+
 bool ResourceProvider::loadConfig(Config& config, const char* path) const {
     if (!path || !path[0]) return false;
 

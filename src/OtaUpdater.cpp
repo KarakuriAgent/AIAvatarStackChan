@@ -52,18 +52,18 @@ OtaUpdater::OtaUpdater()
       progressPercent_(-1),
       updateAvailable_(false),
       changed_(false),
-      taskHandle_(nullptr) {
+      taskHandle_(nullptr),
+      trust_(nullptr) {
     manifestUrl_[0] = '\0';
     apiKey_[0] = '\0';
-    caCert_[0] = '\0';
     statusMessage_[0] = '\0';
     clearManifest();
 }
 
-void OtaUpdater::begin(const Config& config) {
+void OtaUpdater::begin(const Config& config, const OtaTrust* trust) {
     strlcpy(manifestUrl_, config.otaManifestUrl, sizeof(manifestUrl_));
     strlcpy(apiKey_, config.otaApiKey, sizeof(apiKey_));
-    strlcpy(caCert_, config.otaCaCert, sizeof(caCert_));
+    trust_ = trust;
     setStatus(OtaUpdateStatus::Idle, manifestUrl_[0] ? "未確認" : "OTA URL未設定", -1);
 }
 
@@ -200,8 +200,13 @@ bool OtaUpdater::fetchManifest(OtaManifest& manifest) {
     strlcpy(manifest.firmwareUrl, doc["firmware_url"] | "", sizeof(manifest.firmwareUrl));
     strlcpy(manifest.sha256, doc["sha256"] | "", sizeof(manifest.sha256));
     manifest.size = doc["size"] | 0;
+    strlcpy(manifest.signatureKeyId, doc["signature_key_id"] | "",
+            sizeof(manifest.signatureKeyId));
+    strlcpy(manifest.signatureAlg, doc["signature_alg"] | "es256",
+            sizeof(manifest.signatureAlg));
+    strlcpy(manifest.signature, doc["signature"] | "", sizeof(manifest.signature));
 
-    if (!manifest.version[0] || !manifest.firmwareUrl[0] || manifest.size == 0) {
+    if (!manifest.version[0] || !manifest.firmwareUrl[0] || !manifest.sha256[0] || manifest.size == 0) {
         setStatus(OtaUpdateStatus::CheckFailed, "manifest項目不足", -1);
         return false;
     }
@@ -211,6 +216,15 @@ bool OtaUpdater::fetchManifest(OtaManifest& manifest) {
     }
     if (manifest.sha256[0] && strlen(manifest.sha256) != 64) {
         setStatus(OtaUpdateStatus::CheckFailed, "SHA256が不正です", -1);
+        return false;
+    }
+    char signatureError[64] = {};
+    if (!trust_ || !trust_->verifyManifest("firmware", manifest.version, manifest.releaseDate,
+                                          manifest.firmwareUrl, manifest.size, manifest.sha256,
+                                          manifest.signatureKeyId, manifest.signatureAlg,
+                                          manifest.signature, signatureError,
+                                          sizeof(signatureError))) {
+        setStatus(OtaUpdateStatus::CheckFailed, signatureError[0] ? signatureError : "manifest署名検証失敗", -1);
         return false;
     }
     return true;
@@ -364,11 +378,7 @@ void OtaUpdater::clearManifest() {
 }
 
 void OtaUpdater::configureClient(WiFiClientSecure& client) const {
-    if (caCert_[0]) {
-        client.setCACert(caCert_);
-    } else {
-        client.setInsecure();
-    }
+    client.setInsecure();
 }
 
 void OtaUpdater::addAuthHeader(HTTPClient& http) const {

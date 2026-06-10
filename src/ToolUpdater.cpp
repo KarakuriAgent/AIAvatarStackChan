@@ -129,10 +129,10 @@ ToolUpdater::ToolUpdater()
       progressPercent_(-1),
       updateAvailable_(false),
       changed_(false),
-      taskHandle_(nullptr) {
+      taskHandle_(nullptr),
+      trust_(nullptr) {
     manifestUrl_[0] = '\0';
     apiKey_[0] = '\0';
-    caCert_[0] = '\0';
     outputPath_[0] = '\0';
     versionPath_[0] = '\0';
     localVersion_[0] = '\0';
@@ -140,10 +140,10 @@ ToolUpdater::ToolUpdater()
     clearManifest();
 }
 
-void ToolUpdater::begin(const Config& config, const char* outputPath, const char* versionPath) {
+void ToolUpdater::begin(const Config& config, const OtaTrust* trust, const char* outputPath, const char* versionPath) {
     strlcpy(manifestUrl_, config.toolManifestUrl, sizeof(manifestUrl_));
     strlcpy(apiKey_, config.otaApiKey, sizeof(apiKey_));
-    strlcpy(caCert_, config.otaCaCert, sizeof(caCert_));
+    trust_ = trust;
     strlcpy(outputPath_, outputPath && outputPath[0] ? outputPath : "/tools.json",
             sizeof(outputPath_));
     strlcpy(versionPath_, versionPath && versionPath[0] ? versionPath : "/tools.version.json",
@@ -292,8 +292,13 @@ bool ToolUpdater::fetchManifest(ToolManifest& manifest) {
             sizeof(manifest.toolsUrl));
     strlcpy(manifest.sha256, doc["sha256"] | "", sizeof(manifest.sha256));
     manifest.size = doc["size"] | 0;
+    strlcpy(manifest.signatureKeyId, doc["signature_key_id"] | "",
+            sizeof(manifest.signatureKeyId));
+    strlcpy(manifest.signatureAlg, doc["signature_alg"] | "es256",
+            sizeof(manifest.signatureAlg));
+    strlcpy(manifest.signature, doc["signature"] | "", sizeof(manifest.signature));
 
-    if (!manifest.version[0] || !manifest.toolsUrl[0] || manifest.size == 0) {
+    if (!manifest.version[0] || !manifest.toolsUrl[0] || !manifest.sha256[0] || manifest.size == 0) {
         setStatus(OtaUpdateStatus::CheckFailed, "manifest項目不足", -1);
         return false;
     }
@@ -303,6 +308,15 @@ bool ToolUpdater::fetchManifest(ToolManifest& manifest) {
     }
     if (manifest.sha256[0] && strlen(manifest.sha256) != 64) {
         setStatus(OtaUpdateStatus::CheckFailed, "SHA256が不正です", -1);
+        return false;
+    }
+    char signatureError[64] = {};
+    if (!trust_ || !trust_->verifyManifest("tools", manifest.version, manifest.releaseDate,
+                                          manifest.toolsUrl, manifest.size, manifest.sha256,
+                                          manifest.signatureKeyId, manifest.signatureAlg,
+                                          manifest.signature, signatureError,
+                                          sizeof(signatureError))) {
+        setStatus(OtaUpdateStatus::CheckFailed, signatureError[0] ? signatureError : "manifest署名検証失敗", -1);
         return false;
     }
     return true;
@@ -743,11 +757,7 @@ void ToolUpdater::clearManifest() {
 }
 
 void ToolUpdater::configureClient(WiFiClientSecure& client) const {
-    if (caCert_[0]) {
-        client.setCACert(caCert_);
-    } else {
-        client.setInsecure();
-    }
+    client.setInsecure();
 }
 
 void ToolUpdater::addAuthHeader(HTTPClient& http) const {

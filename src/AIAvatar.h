@@ -11,6 +11,7 @@
 #include "MotionController.h"
 #include "OpenClawEffects.h"
 #include "OtaUpdater.h"
+#include "OtaTrust.h"
 #include "ResourceProvider.h"
 #include "SleepManager.h"
 #include "StackChanHardware.h"
@@ -160,6 +161,7 @@ private:
     SystemUIController systemUI_;
     VisualEffects visualEffects_;
     OpenClawEffects openClaw_;
+    OtaTrust otaTrust_;
     OtaUpdater otaUpdater_;
     ToolUpdater toolUpdater_;
     SleepManager sleepManager_;

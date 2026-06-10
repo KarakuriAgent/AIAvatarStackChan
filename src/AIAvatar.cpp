@@ -121,10 +121,12 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     defaultResources_ = resources;
     config_ = config;
     loadPersistedSettings();
+    otaTrust_.clear();
+    otaTrust_.loadFromBuiltin(defaultResources_);
     idleAudioAccumulator_.reset();
     nextIdleMotionMs_ = 0;
-    otaUpdater_.begin(config_);
-    toolUpdater_.begin(config_);
+    otaUpdater_.begin(config_, &otaTrust_);
+    toolUpdater_.begin(config_, &otaTrust_);
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
     volume_ = config_.speakerVolume;
     speaker_.setAutoNormalize(config_.audioNormalizeTargetPeak,

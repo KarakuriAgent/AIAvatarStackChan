@@ -12,6 +12,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urljoin
 
+from manifest_signing import add_manifest_signature
+
 
 SKIPPED_NAMES = {".DS_Store"}
 SKIPPED_PREFIXES = ("._",)
@@ -73,6 +75,8 @@ def main() -> int:
     parser.add_argument("--base-url", required=True, help="Public HTTPS base URL, e.g. https://ota.example.com/")
     parser.add_argument("--package-name", default="tools/tools.zip", help="Published ZIP path")
     parser.add_argument("--release-date", default=dt.date.today().isoformat())
+    parser.add_argument("--signing-key", type=Path, help="ES256 private key for manifest signing")
+    parser.add_argument("--signature-key-id", help="Signing key identifier stored in the manifest")
     args = parser.parse_args()
 
     source_dir = args.source_dir.resolve()
@@ -94,6 +98,15 @@ def main() -> int:
         "size": output_zip.stat().st_size,
         "sha256": sha256_file(output_zip),
     }
+    if args.signing_key or args.signature_key_id:
+        if not args.signing_key or not args.signature_key_id:
+            raise SystemExit("--signing-key and --signature-key-id must be used together")
+        add_manifest_signature(
+            manifest,
+            kind="tools",
+            private_key=args.signing_key.resolve(),
+            key_id=args.signature_key_id,
+        )
 
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

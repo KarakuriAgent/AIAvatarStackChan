@@ -20,7 +20,6 @@
   "ota_manifest_url": "https://ota.example.com/manifest.json",
   "tool_manifest_url": "https://ota.example.com/tools/manifest.json",
   "ota_api_key": "",
-  "ota_ca_cert": "",
   "timezone": "JST-9",
   "mic_sample_rate": 16000,
   "mic_magnification": 16,
