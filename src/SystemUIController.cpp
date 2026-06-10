@@ -61,6 +61,7 @@ SystemUIController::SystemUIController()
       statusOverlay_(nullptr),
       virtualButtonsEnabled_(true),
       touchPushToTalkEnabled_(true),
+      inputLocked_(false),
       virtualButtonAreas_{{0, 190, 72, 50}, {124, 190, 72, 50}, {248, 190, 72, 50}},
       buttonActions_{ButtonAction::VolumeCycle, ButtonAction::None, ButtonAction::None},
       uiVisible_(true),
@@ -104,8 +105,23 @@ void SystemUIController::begin(AIAvatar& avatar, const Config& config,
     statusOverlay_ = &statusOverlay;
 }
 
+void SystemUIController::setInputLocked(bool locked) {
+    if (inputLocked_ == locked) return;
+    inputLocked_ = locked;
+    // ロック前後の中途半端なタッチ状態を引き継がない
+    touchActive_ = false;
+    touchHeld_ = false;
+    settingsHoldActive_ = false;
+    settingsHoldTarget_ = HoldTarget::None;
+}
+
 void SystemUIController::update() {
     if (!avatar_ || !statusOverlay_) return;
+
+    if (inputLocked_) {
+        // 更新処理中: タッチ入力(戻るボタン・仮想ボタン・PTT含む)を全て無視する
+        return;
+    }
 
     if (menuOpen_ && millis() >= menuAutoCloseMs_) {
         closeMenu();

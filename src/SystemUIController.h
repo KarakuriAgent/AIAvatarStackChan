@@ -39,6 +39,9 @@ public:
     bool settingsOpen() const { return settingsOpen_; }
     bool toolMenuOpen() const { return toolMenuOpen_; }
     bool uiVisible() const { return uiVisible_; }
+    // 更新処理中などにタッチ入力(戻るボタン含む)を全て無効化する。描画は継続する。
+    void setInputLocked(bool locked);
+    bool inputLocked() const { return inputLocked_; }
     void setVirtualButtonsEnabled(bool enabled) { virtualButtonsEnabled_ = enabled; }
     bool virtualButtonsEnabled() const { return virtualButtonsEnabled_; }
     void setTouchPushToTalkEnabled(bool enabled) { touchPushToTalkEnabled_ = enabled; }
@@ -97,6 +100,7 @@ private:
     StatusOverlay* statusOverlay_;
     bool virtualButtonsEnabled_;
     bool touchPushToTalkEnabled_;
+    bool inputLocked_;
     UiRect virtualButtonAreas_[kButtonCount];
     ButtonAction buttonActions_[kButtonCount];
     bool uiVisible_;

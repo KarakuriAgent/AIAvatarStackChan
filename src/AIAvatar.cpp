@@ -40,6 +40,8 @@ AIAvatar::AIAvatar()
       wsConnectPending_(false),
       wsDisconnectPending_(false),
       wsReconnectAfterNetworkUpdate_(false),
+      updateQuiesceActive_(false),
+      micQuiescePaused_(false),
       playbackActive_(false),
       pushToTalkActive_(false),
       pttSendPending_(false),
@@ -345,6 +347,7 @@ void AIAvatar::update() {
         display_.setDirty();
     }
     if (otaChanged || toolChanged) {
+        endUpdateQuiesceIfIdle();
         resumeWebSocketAfterNetworkUpdateIfIdle();
     }
     if (config_.fastStartup && deferredStartupStage_ >= 7) {
@@ -439,7 +442,7 @@ bool AIAvatar::canRunHeavyDeferredWork() const {
     uint32_t now = millis();
     if (static_cast<int32_t>(now - heavyDeferredResumeMs_) < 0) return false;
     return !pushToTalkActive_ && !pttSendPending_ && !serverProcessing_ && !playbackActive_ &&
-           !toolUpdater_.busy();
+           !toolUpdater_.busy() && !otaUpdater_.busy() && !updateQuiesceActive_;
 }
 
 void AIAvatar::beginDeferredWiFi() {
@@ -510,11 +513,9 @@ bool AIAvatar::checkForFirmwareUpdate() {
 }
 
 bool AIAvatar::startFirmwareUpdate() {
-    prepareNetworkUpdate("OTA update");
-    if (otaUpdater_.updateAvailable()) {
-        wsDisconnectPending_ = true;
-    }
+    beginUpdateQuiesce("OTA update");
     bool ok = otaUpdater_.startUpdate();
+    if (!ok) endUpdateQuiesceIfIdle();
     display_.setDirty();
     return ok;
 }
@@ -527,11 +528,10 @@ bool AIAvatar::checkForToolUpdate() {
 }
 
 bool AIAvatar::startToolUpdate() {
-    prepareNetworkUpdate("tool update");
-    cancelPlayback();
-    toolActions_.cancel();
+    beginUpdateQuiesce("tool update");
     toolUpdateReloaded_ = false;
     bool ok = toolUpdater_.startUpdate();
+    if (!ok) endUpdateQuiesceIfIdle();
     display_.setDirty();
     return ok;
 }
@@ -734,8 +734,12 @@ void AIAvatar::prepareNetworkUpdate(const char* reason) {
     resetSleepTimer(reason);
     if (config_.wsHost[0] == '\0' || !websocketReady_ || !wsTaskHandle_) return;
 
-    wsReconnectAfterNetworkUpdate_ = true;
+    // 復帰時は「実行前の状態」に戻す: WSが有効だった場合のみ再接続を予約する
+    bool wsWasActive = ws_.isConnected() || ws_.autoReconnectEnabled();
+    wsReconnectAfterNetworkUpdate_ = wsWasActive;
     wsConnectPending_ = false;
+    if (!wsWasActive) return;
+
     wsDisconnectPending_ = true;
     Serial.printf("[AIAvatar] stopping websocket for %s\n",
                   reason ? reason : "network update");
@@ -759,6 +763,43 @@ void AIAvatar::resumeWebSocketAfterNetworkUpdateIfIdle() {
     wsReconnectAfterNetworkUpdate_ = false;
     wsConnectPending_ = true;
     Serial.println("[AIAvatar] resuming websocket after network update");
+}
+
+void AIAvatar::beginUpdateQuiesce(const char* reason) {
+    if (updateQuiesceActive_) return;
+
+    // DL・更新中は更新処理と画面更新以外を止める。終了時は実行前の状態に戻す。
+    Serial.printf("[AIAvatar] quiesce begin for %s\n", reason ? reason : "update");
+    cancelPlayback();
+    toolActions_.cancel();
+    pushToTalkActive_ = false;
+    pttSendPending_ = false;
+
+    // スピーカーがマイクへ戻るのを待ってからタスクを休止させる
+    uint32_t startedAt = millis();
+    while (playbackActive_ && millis() - startedAt < 1500) {
+        delay(10);
+    }
+    updateQuiesceActive_ = true;
+    startedAt = millis();
+    while (micTaskHandle_ && !micQuiescePaused_ && millis() - startedAt < 1500) {
+        delay(10);
+    }
+
+    prepareNetworkUpdate(reason);
+    systemUI_.setInputLocked(true);
+    display_.setDirty();
+}
+
+void AIAvatar::endUpdateQuiesceIfIdle() {
+    if (!updateQuiesceActive_) return;
+    if (otaUpdater_.busy() || toolUpdater_.busy()) return;
+
+    Serial.println("[AIAvatar] quiesce end: restoring previous state");
+    updateQuiesceActive_ = false;  // マイクタスクが休止前の状態に復帰する
+    systemUI_.setInputLocked(false);
+    resumeWebSocketAfterNetworkUpdateIfIdle();  // WSは実行前に有効だった場合のみ再接続
+    display_.setDirty();
 }
 
 void AIAvatar::switchWiFi(uint8_t networkIndex) {
@@ -802,6 +843,24 @@ void AIAvatar::runMicCapture() {
     uint32_t lastSpeechDetectedMs = 0;
 
     for (;;) {
+        if (updateQuiesceActive_) {
+            // 更新中はマイク入力を完全停止する。終了後に元へ戻す。
+            if (!micQuiescePaused_) {
+                mic_.end();
+                micQuiescePaused_ = true;
+                Serial.println("[AIAvatar] mic paused for update");
+            }
+            idleAudioAccumulator_.reset();
+            nextIdleMotionMs_ = 0;
+            delay(20);
+            continue;
+        }
+        if (micQuiescePaused_) {
+            micQuiescePaused_ = false;
+            mic_.begin();
+            Serial.println("[AIAvatar] mic resumed after update");
+        }
+
         if (playbackActive_) {
             idleAudioAccumulator_.reset();
             nextIdleMotionMs_ = 0;
@@ -901,6 +960,11 @@ void AIAvatar::runSpeakerPlayback() {
     uint32_t waitStartMs = 0;
 
     for (;;) {
+        if (updateQuiesceActive_ && !speakerMode) {
+            // 更新中は新規再生を開始しない(再生途中の停止処理は通常どおり流す)
+            delay(20);
+            continue;
+        }
         if (speaker_.consumeImmediateStopRequested()) {
             speaker_.stopHardware();
             speaker_.resetState();

@@ -80,6 +80,8 @@ public:
     void sendStop();
 
     bool isConnected() const { return connected_; }
+    // 接続維持(自動再接続)が有効か。disconnect()でfalse、begin()/reconnect()でtrueになる。
+    bool autoReconnectEnabled() const { return autoReconnectEnabled_; }
     const char* sessionId() const { return sessionId_; }
 
 private:

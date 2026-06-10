@@ -173,6 +173,8 @@ private:
     volatile bool wsConnectPending_;
     volatile bool wsDisconnectPending_;
     volatile bool wsReconnectAfterNetworkUpdate_;
+    volatile bool updateQuiesceActive_;
+    volatile bool micQuiescePaused_;
     volatile bool playbackActive_;
     volatile bool pushToTalkActive_;
     volatile bool pttSendPending_;
@@ -257,6 +259,8 @@ private:
     void updateWifiSwitch();
     void prepareNetworkUpdate(const char* reason);
     void resumeWebSocketAfterNetworkUpdateIfIdle();
+    void beginUpdateQuiesce(const char* reason);
+    void endUpdateQuiesceIfIdle();
     void updateStatusOverlay();
     void showVisionPreview(const uint8_t* jpgBuf, size_t jpgLen);
     void updateVisionPreview();
