@@ -26,6 +26,8 @@ constexpr const char* kPrefsIdleMotionIntervalKey = "idle_int";
 constexpr const char* kPrefsIdleMotionTypeKey = "idle_type";
 constexpr uint8_t kNoWifiNetworkIndex = 0xff;
 constexpr uint32_t kSettingsSaveDebounceMs = 700;
+constexpr uint32_t kNetworkUpdateWsDisconnectWaitMs = 3000;
+constexpr uint32_t kNetworkUpdateWsSettleMs = 100;
 
 }  // namespace
 
@@ -37,6 +39,7 @@ AIAvatar::AIAvatar()
       serverProcessing_(false),
       wsConnectPending_(false),
       wsDisconnectPending_(false),
+      wsReconnectAfterNetworkUpdate_(false),
       playbackActive_(false),
       pushToTalkActive_(false),
       pttSendPending_(false),
@@ -329,15 +332,20 @@ void AIAvatar::update() {
     systemUI_.update();
     toolActions_.update();
     updatePersistedSettings();
-    if (otaUpdater_.consumeChanged()) {
+    bool otaChanged = otaUpdater_.consumeChanged();
+    if (otaChanged) {
         display_.setDirty();
     }
-    if (toolUpdater_.consumeChanged()) {
+    bool toolChanged = toolUpdater_.consumeChanged();
+    if (toolChanged) {
         if (toolUpdater_.status() == OtaUpdateStatus::UpdateSucceeded && !toolUpdateReloaded_) {
             toolActions_.reload();
             toolUpdateReloaded_ = true;
         }
         display_.setDirty();
+    }
+    if (otaChanged || toolChanged) {
+        resumeWebSocketAfterNetworkUpdateIfIdle();
     }
     if (config_.fastStartup && deferredStartupStage_ >= 7) {
         face_.setDeferredLoadingEnabled(canRunHeavyDeferredWork());
@@ -495,14 +503,14 @@ const char* AIAvatar::firmwareReleaseDate() const {
 }
 
 bool AIAvatar::checkForFirmwareUpdate() {
-    resetSleepTimer("OTA check");
+    prepareNetworkUpdate("OTA check");
     bool ok = otaUpdater_.checkForUpdate();
     display_.setDirty();
     return ok;
 }
 
 bool AIAvatar::startFirmwareUpdate() {
-    resetSleepTimer("OTA update");
+    prepareNetworkUpdate("OTA update");
     if (otaUpdater_.updateAvailable()) {
         wsDisconnectPending_ = true;
     }
@@ -512,14 +520,14 @@ bool AIAvatar::startFirmwareUpdate() {
 }
 
 bool AIAvatar::checkForToolUpdate() {
-    resetSleepTimer("tool update check");
+    prepareNetworkUpdate("tool update check");
     bool ok = toolUpdater_.checkForUpdate();
     display_.setDirty();
     return ok;
 }
 
 bool AIAvatar::startToolUpdate() {
-    resetSleepTimer("tool update");
+    prepareNetworkUpdate("tool update");
     cancelPlayback();
     toolActions_.cancel();
     toolUpdateReloaded_ = false;
@@ -720,6 +728,37 @@ void AIAvatar::connectWebSocket() {
 
 void AIAvatar::disconnectWebSocket() {
     wsDisconnectPending_ = true;
+}
+
+void AIAvatar::prepareNetworkUpdate(const char* reason) {
+    resetSleepTimer(reason);
+    if (config_.wsHost[0] == '\0' || !websocketReady_ || !wsTaskHandle_) return;
+
+    wsReconnectAfterNetworkUpdate_ = true;
+    wsConnectPending_ = false;
+    wsDisconnectPending_ = true;
+    Serial.printf("[AIAvatar] stopping websocket for %s\n",
+                  reason ? reason : "network update");
+
+    uint32_t startedAt = millis();
+    while (wsDisconnectPending_ &&
+           millis() - startedAt < kNetworkUpdateWsDisconnectWaitMs) {
+        delay(10);
+    }
+    if (wsDisconnectPending_) {
+        Serial.println("[AIAvatar] websocket stop wait timed out");
+    }
+    delay(kNetworkUpdateWsSettleMs);
+}
+
+void AIAvatar::resumeWebSocketAfterNetworkUpdateIfIdle() {
+    if (!wsReconnectAfterNetworkUpdate_) return;
+    if (otaUpdater_.busy() || toolUpdater_.busy()) return;
+    if (config_.wsHost[0] == '\0' || !websocketReady_ || !WiFi.isConnected()) return;
+
+    wsReconnectAfterNetworkUpdate_ = false;
+    wsConnectPending_ = true;
+    Serial.println("[AIAvatar] resuming websocket after network update");
 }
 
 void AIAvatar::switchWiFi(uint8_t networkIndex) {

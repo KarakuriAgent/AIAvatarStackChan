@@ -36,6 +36,26 @@ bool startsWithHttps(const char* url) {
     return url && strncmp(url, "https://", 8) == 0;
 }
 
+void formatHttpFailure(char* out, size_t outSize, const char* label, int code) {
+    if (!out || outSize == 0) return;
+    if (code < 0) {
+        String reason = HTTPClient::errorToString(code);
+        snprintf(out, outSize, "%s: %s", label, reason.c_str());
+        return;
+    }
+    snprintf(out, outSize, "%s: %d", label, code);
+}
+
+void logHttpFailure(const char* owner, const char* url, int code) {
+    String reason = code < 0 ? HTTPClient::errorToString(code) : String();
+    Serial.printf("[%s] GET failed url=%s code=%d%s%s\n",
+                  owner,
+                  url ? url : "",
+                  code,
+                  reason.length() ? " error=" : "",
+                  reason.length() ? reason.c_str() : "");
+}
+
 void bytesToHex(const uint8_t* bytes, size_t len, char* out, size_t outSize) {
     static constexpr char kHex[] = "0123456789abcdef";
     if (!out || outSize == 0) return;
@@ -261,6 +281,7 @@ bool ToolUpdater::fetchManifest(ToolManifest& manifest) {
     http.setTimeout(kHttpTimeoutMs);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     if (!http.begin(client, manifestUrl_)) {
+        Serial.printf("[ToolUpdater] manifest begin failed url=%s\n", manifestUrl_);
         setStatus(OtaUpdateStatus::CheckFailed, "manifest接続失敗", -1);
         return false;
     }
@@ -268,8 +289,9 @@ bool ToolUpdater::fetchManifest(ToolManifest& manifest) {
 
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "manifest取得失敗: %d", code);
+        char msg[96];
+        formatHttpFailure(msg, sizeof(msg), "manifest取得失敗", code);
+        logHttpFailure("ToolUpdater", manifestUrl_, code);
         http.end();
         setStatus(OtaUpdateStatus::CheckFailed, msg, -1);
         return false;
@@ -337,6 +359,7 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
     http.setTimeout(kHttpTimeoutMs);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     if (!http.begin(client, manifest.toolsUrl)) {
+        Serial.printf("[ToolUpdater] package begin failed url=%s\n", manifest.toolsUrl);
         setStatus(OtaUpdateStatus::UpdateFailed, "package接続失敗", -1);
         return false;
     }
@@ -344,8 +367,9 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
 
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "package取得失敗: %d", code);
+        char msg[96];
+        formatHttpFailure(msg, sizeof(msg), "package取得失敗", code);
+        logHttpFailure("ToolUpdater", manifest.toolsUrl, code);
         http.end();
         setStatus(OtaUpdateStatus::UpdateFailed, msg, -1);
         return false;
