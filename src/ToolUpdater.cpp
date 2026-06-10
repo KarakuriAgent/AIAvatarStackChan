@@ -1,5 +1,7 @@
 #include "ToolUpdater.h"
 
+#include "SpiBusLock.h"
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -73,6 +75,11 @@ void bytesToHex(const uint8_t* bytes, size_t len, char* out, size_t outSize) {
 
 bool sdReady() {
     return SD.cardType() != CARD_NONE;
+}
+
+void removeTempPackage() {
+    SpiBusLockGuard lock;
+    SD.remove(kTempPackagePath);
 }
 
 uint16_t readLe16(const uint8_t* p) {
@@ -199,8 +206,8 @@ bool ToolUpdater::startTask(Operation operation) {
         setStatus(OtaUpdateStatus::CheckFailed, "ツール更新URL未設定", -1);
         return false;
     }
-    if (operation == Operation::Update && !sdReady()) {
-        setStatus(OtaUpdateStatus::UpdateFailed, "SD未使用", -1);
+    if (!sdReady()) {
+        setStatus(OtaUpdateStatus::CheckFailed, "SD未使用", -1);
         return false;
     }
     if (!WiFi.isConnected()) {
@@ -350,14 +357,7 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
         return false;
     }
 
-    uint8_t* package = static_cast<uint8_t*>(ps_malloc(manifest.size));
-    if (!package) package = static_cast<uint8_t*>(malloc(manifest.size));
-    if (!package) {
-        setStatus(OtaUpdateStatus::UpdateFailed, "packageメモリ不足", -1);
-        return false;
-    }
-    Serial.printf("[ToolUpdater] downloading package to memory size=%u\n",
-                  static_cast<unsigned>(manifest.size));
+    removeTempPackage();
 
     WiFiClientSecure client;
     configureClient(client);
@@ -367,7 +367,6 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     if (!http.begin(client, manifest.toolsUrl)) {
         Serial.printf("[ToolUpdater] package begin failed url=%s\n", manifest.toolsUrl);
-        free(package);
         setStatus(OtaUpdateStatus::UpdateFailed, "package接続失敗", -1);
         return false;
     }
@@ -379,7 +378,6 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
         formatHttpFailure(msg, sizeof(msg), "package取得失敗", code);
         logHttpFailure("ToolUpdater", manifest.toolsUrl, code);
         http.end();
-        free(package);
         setStatus(OtaUpdateStatus::UpdateFailed, msg, -1);
         return false;
     }
@@ -387,13 +385,24 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
     int contentLength = http.getSize();
     if (contentLength > 0 && static_cast<size_t>(contentLength) != manifest.size) {
         http.end();
-        free(package);
         setStatus(OtaUpdateStatus::UpdateFailed, "packageサイズ不一致", -1);
         return false;
     }
 
+    File out;
+    {
+        SpiBusLockGuard lock;
+        out = SD.open(kTempPackagePath, FILE_WRITE);
+    }
+    if (!out) {
+        http.end();
+        setStatus(OtaUpdateStatus::UpdateFailed, "一時ファイル作成失敗", -1);
+        return false;
+    }
+
     WiFiClient* stream = http.getStreamPtr();
-    size_t received = 0;
+    uint8_t buffer[kDownloadBufferSize];
+    size_t written = 0;
     uint32_t lastDataMs = millis();
     int lastProgress = -1;
 
@@ -401,11 +410,15 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
     mbedtls_sha256_init(&sha);
     mbedtls_sha256_starts(&sha, 0);
 
-    while (received < manifest.size) {
+    while (written < manifest.size) {
         if (!http.connected() && stream->available() == 0) {
             mbedtls_sha256_free(&sha);
+            {
+                SpiBusLockGuard lock;
+                out.close();
+            }
+            removeTempPackage();
             http.end();
-            free(package);
             setStatus(OtaUpdateStatus::UpdateFailed, "接続が切断されました", -1);
             return false;
         }
@@ -414,8 +427,12 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
         if (available <= 0) {
             if (millis() - lastDataMs > kHttpTimeoutMs) {
                 mbedtls_sha256_free(&sha);
+                {
+                    SpiBusLockGuard lock;
+                    out.close();
+                }
+                removeTempPackage();
                 http.end();
-                free(package);
                 setStatus(OtaUpdateStatus::UpdateFailed, "ダウンロードタイムアウト", -1);
                 return false;
             }
@@ -423,18 +440,36 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
             continue;
         }
 
-        size_t remaining = manifest.size - received;
+        size_t remaining = manifest.size - written;
         size_t toRead = available;
-        if (toRead > kDownloadBufferSize) toRead = kDownloadBufferSize;
+        if (toRead > sizeof(buffer)) toRead = sizeof(buffer);
         if (toRead > remaining) toRead = remaining;
 
-        size_t readLen = stream->readBytes(package + received, toRead);
+        size_t readLen = stream->readBytes(buffer, toRead);
         if (readLen == 0) continue;
         lastDataMs = millis();
 
-        mbedtls_sha256_update(&sha, package + received, readLen);
-        received += readLen;
-        int progress = static_cast<int>((received * 100) / manifest.size);
+        size_t writeLen;
+        {
+            // 1チャンクごとにロックを取り直し、合間に進捗描画を許す
+            SpiBusLockGuard lock;
+            writeLen = out.write(buffer, readLen);
+        }
+        if (writeLen != readLen) {
+            mbedtls_sha256_free(&sha);
+            {
+                SpiBusLockGuard lock;
+                out.close();
+            }
+            removeTempPackage();
+            http.end();
+            setStatus(OtaUpdateStatus::UpdateFailed, "SD書き込み失敗", -1);
+            return false;
+        }
+
+        mbedtls_sha256_update(&sha, buffer, readLen);
+        written += readLen;
+        int progress = static_cast<int>((written * 100) / manifest.size);
         if (progress != lastProgress) {
             lastProgress = progress;
             char msg[48];
@@ -443,6 +478,10 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
         }
     }
 
+    {
+        SpiBusLockGuard lock;
+        out.close();
+    }
     http.end();
 
     uint8_t digest[32];
@@ -453,28 +492,22 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
         char actual[65];
         bytesToHex(digest, sizeof(digest), actual, sizeof(actual));
         if (!equalsIgnoreCase(actual, manifest.sha256)) {
-            free(package);
+            removeTempPackage();
             setStatus(OtaUpdateStatus::UpdateFailed, "SHA256不一致", -1);
             return false;
         }
     }
 
     setProgress(100, "展開検証中");
-    if (!removeRecursive(kStagingDir)) {
-        Serial.printf("[ToolUpdater] staging cleanup failed path=%s\n", kStagingDir);
-        free(package);
-        setStatus(OtaUpdateStatus::UpdateFailed, "一時展開削除失敗", -1);
-        return false;
-    }
+    removeRecursive(kStagingDir);
     if (!ensureDirectoryPath(kStagingDir)) {
-        Serial.printf("[ToolUpdater] staging mkdir failed path=%s\n", kStagingDir);
-        free(package);
-        setStatus(OtaUpdateStatus::UpdateFailed, "一時展開作成失敗", -1);
+        removeTempPackage();
+        setStatus(OtaUpdateStatus::UpdateFailed, "展開先作成失敗", -1);
         return false;
     }
-    if (!extractPackageBuffer(package, manifest.size, kStagingDir)) {
+    if (!extractPackage(kTempPackagePath, kStagingDir)) {
         removeRecursive(kStagingDir);
-        free(package);
+        removeTempPackage();
         return false;
     }
 
@@ -483,27 +516,26 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
     if (!buildPackagePath(kStagingDir, outputEntry, stagedToolsPath, sizeof(stagedToolsPath)) ||
         !validateToolsJson(stagedToolsPath)) {
         removeRecursive(kStagingDir);
-        free(package);
-        Serial.printf("[ToolUpdater] staged tools.json invalid path=%s\n", stagedToolsPath);
+        removeTempPackage();
         setStatus(OtaUpdateStatus::UpdateFailed, "tools JSON不正", -1);
         return false;
     }
 
     setProgress(100, "SDへ展開中");
-    if (!extractPackageBuffer(package, manifest.size, "/")) {
+    if (!extractPackage(kTempPackagePath, "/")) {
         removeRecursive(kStagingDir);
-        free(package);
+        removeTempPackage();
         return false;
     }
-    free(package);
     if (!validateToolsJson(outputPath_)) {
         removeRecursive(kStagingDir);
+        removeTempPackage();
         setStatus(OtaUpdateStatus::UpdateFailed, "適用後JSON不正", -1);
         return false;
     }
 
     removeRecursive(kStagingDir);
-    SD.remove(kTempPackagePath);
+    removeTempPackage();
     if (!writeLocalVersion(manifest)) {
         setStatus(OtaUpdateStatus::UpdateFailed, "version保存失敗", -1);
         return false;
@@ -511,138 +543,21 @@ bool ToolUpdater::downloadAndApply(const ToolManifest& manifest) {
     return true;
 }
 
-bool ToolUpdater::extractPackageBuffer(const uint8_t* package, size_t packageSize,
-                                       const char* destRoot) {
-    if (!package || packageSize == 0) {
-        setStatus(OtaUpdateStatus::UpdateFailed, "packageを開けません", -1);
-        return false;
-    }
-
-    size_t pos = 0;
-    auto readBytes = [&](uint8_t* dest, size_t len) -> bool {
-        if (len > packageSize || pos > packageSize - len) return false;
-        memcpy(dest, package + pos, len);
-        pos += len;
-        return true;
-    };
-    auto skip = [&](size_t len) -> bool {
-        if (len > packageSize || pos > packageSize - len) return false;
-        pos += len;
-        return true;
-    };
-
-    while (pos < packageSize) {
-        uint8_t sigBuf[4];
-        if (!readBytes(sigBuf, sizeof(sigBuf))) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zip読込失敗", -1);
-            return false;
-        }
-        uint32_t sig = readLe32(sigBuf);
-        if (sig == kZipCentralHeaderSignature || sig == kZipEndCentralDirectorySignature) {
-            break;
-        }
-        if (sig != kZipLocalHeaderSignature) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zip形式不正", -1);
-            return false;
-        }
-
-        uint8_t header[26];
-        if (!readBytes(header, sizeof(header))) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zipヘッダ不正", -1);
-            return false;
-        }
-
-        uint16_t flags = readLe16(header + 2);
-        uint16_t method = readLe16(header + 4);
-        uint32_t compressedSize = readLe32(header + 14);
-        uint32_t uncompressedSize = readLe32(header + 18);
-        uint16_t nameLen = readLe16(header + 22);
-        uint16_t extraLen = readLe16(header + 24);
-
-        if ((flags & 0x0009) != 0 || method != kZipMethodStore ||
-            compressedSize != uncompressedSize || nameLen == 0 || nameLen >= kZipNameMax) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zipはstore形式のみ対応", -1);
-            return false;
-        }
-
-        char entryName[kZipNameMax];
-        if (!readBytes(reinterpret_cast<uint8_t*>(entryName), nameLen)) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zip名読込失敗", -1);
-            return false;
-        }
-        entryName[nameLen] = '\0';
-        normalizeSlashes(entryName);
-
-        if (!isSafeZipPath(entryName)) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zip内パス不正", -1);
-            return false;
-        }
-        if (!skip(extraLen)) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zip読込失敗", -1);
-            return false;
-        }
-        if (compressedSize > packageSize || pos > packageSize - compressedSize) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zipデータ不足", -1);
-            return false;
-        }
-
-        char outPath[kSdPathMax];
-        if (!buildPackagePath(destRoot, entryName, outPath, sizeof(outPath))) {
-            setStatus(OtaUpdateStatus::UpdateFailed, "zipパス長すぎ", -1);
-            return false;
-        }
-
-        if (endsWithSlash(entryName)) {
-            if (!ensureDirectoryPath(outPath) || compressedSize != 0) {
-                setStatus(OtaUpdateStatus::UpdateFailed, "zipディレクトリ不正", -1);
-                return false;
-            }
-            continue;
-        }
-
-        if (!ensureParentDirs(outPath)) {
-            Serial.printf("[ToolUpdater] parent mkdir failed path=%s\n", outPath);
-            setStatus(OtaUpdateStatus::UpdateFailed, "展開親DIR作成失敗", -1);
-            return false;
-        }
-
-        SD.remove(outPath);
-        File out = SD.open(outPath, FILE_WRITE);
-        if (!out) {
-            Serial.printf("[ToolUpdater] output open failed path=%s\n", outPath);
-            setStatus(OtaUpdateStatus::UpdateFailed, "展開ファイル作成失敗", -1);
-            return false;
-        }
-
-        uint32_t remaining = compressedSize;
-        while (remaining > 0) {
-            size_t toWrite = remaining > kDownloadBufferSize ? kDownloadBufferSize : remaining;
-            size_t writeLen = out.write(package + pos, toWrite);
-            if (writeLen != toWrite) {
-                Serial.printf("[ToolUpdater] extract write failed path=%s wrote=%u expected=%u\n",
-                              outPath, static_cast<unsigned>(writeLen),
-                              static_cast<unsigned>(toWrite));
-                out.close();
-                setStatus(OtaUpdateStatus::UpdateFailed, "展開書込失敗", -1);
-                return false;
-            }
-            pos += toWrite;
-            remaining -= toWrite;
-        }
-        out.close();
-    }
-
-    return true;
-}
-
 bool ToolUpdater::extractPackage(const char* packagePath, const char* destRoot) {
-    File zip = SD.open(packagePath, FILE_READ);
+    File zip;
+    {
+        SpiBusLockGuard lock;
+        zip = SD.open(packagePath, FILE_READ);
+    }
     if (!zip) {
         setStatus(OtaUpdateStatus::UpdateFailed, "packageを開けません", -1);
         return false;
     }
 
-    while (zip.available()) {
+    while (true) {
+        // 1エントリ分のSDアクセスをまとめて排他し、エントリ間で描画タスクへ譲る
+        SpiBusLockGuard lock;
+        if (!zip.available()) break;
         uint8_t sigBuf[4];
         if (!readExact(zip, sigBuf, sizeof(sigBuf))) {
             zip.close();
@@ -718,8 +633,7 @@ bool ToolUpdater::extractPackage(const char* packagePath, const char* destRoot) 
 
         if (!ensureParentDirs(outPath)) {
             zip.close();
-            Serial.printf("[ToolUpdater] parent mkdir failed path=%s\n", outPath);
-            setStatus(OtaUpdateStatus::UpdateFailed, "展開親DIR作成失敗", -1);
+            setStatus(OtaUpdateStatus::UpdateFailed, "展開先作成失敗", -1);
             return false;
         }
 
@@ -753,12 +667,16 @@ bool ToolUpdater::extractPackage(const char* packagePath, const char* destRoot) 
         out.close();
     }
 
-    zip.close();
+    {
+        SpiBusLockGuard lock;
+        zip.close();
+    }
     return true;
 }
 
 bool ToolUpdater::removeRecursive(const char* path) {
     if (!path || !path[0] || strcmp(path, "/") == 0) return false;
+    SpiBusLockGuard lock;
     if (!SD.exists(path)) return true;
 
     File entry = SD.open(path);
@@ -790,6 +708,7 @@ bool ToolUpdater::ensureDirectoryPath(const char* path) {
     if (!path || !path[0]) return false;
     if (strcmp(path, "/") == 0) return true;
 
+    SpiBusLockGuard lock;
     char current[kSdPathMax];
     strlcpy(current, path, sizeof(current));
     size_t len = strlen(current);
@@ -801,22 +720,15 @@ bool ToolUpdater::ensureDirectoryPath(const char* path) {
         if (*p != '/') continue;
         *p = '\0';
         if (!SD.exists(current) && !SD.mkdir(current)) {
-            Serial.printf("[ToolUpdater] mkdir failed path=%s\n", current);
             *p = '/';
             return false;
         }
         *p = '/';
     }
 
-    if (!SD.exists(current) && !SD.mkdir(current)) {
-        Serial.printf("[ToolUpdater] mkdir failed path=%s\n", current);
-        return false;
-    }
+    if (!SD.exists(current) && !SD.mkdir(current)) return false;
     File dir = SD.open(current);
     bool ok = dir && dir.isDirectory();
-    if (!ok) {
-        Serial.printf("[ToolUpdater] path is not directory: %s\n", current);
-    }
     if (dir) dir.close();
     return ok;
 }
@@ -850,6 +762,7 @@ bool ToolUpdater::buildPackagePath(const char* root, const char* entryName, char
 }
 
 bool ToolUpdater::validateToolsJson(const char* path) {
+    SpiBusLockGuard lock;
     File file = SD.open(path, FILE_READ);
     if (!file) return false;
 
@@ -862,6 +775,7 @@ bool ToolUpdater::validateToolsJson(const char* path) {
 
 bool ToolUpdater::loadLocalVersion() {
     localVersion_[0] = '\0';
+    SpiBusLockGuard lock;
     if (!sdReady() || !SD.exists(versionPath_)) return false;
 
     File file = SD.open(versionPath_, FILE_READ);
@@ -877,6 +791,7 @@ bool ToolUpdater::loadLocalVersion() {
 }
 
 bool ToolUpdater::writeLocalVersion(const ToolManifest& manifest) {
+    SpiBusLockGuard lock;
     SD.remove(versionPath_);
     File file = SD.open(versionPath_, FILE_WRITE);
     if (!file) return false;

@@ -1,5 +1,6 @@
 #include "ScreenRenderer.h"
 #include "ResourceProvider.h"
+#include "SpiBusLock.h"
 
 #include <Arduino.h>
 #include <algorithm>
@@ -244,6 +245,8 @@ void ScreenRenderer::update() {
     }
     if (overlayCb_) overlayCb_(canvas_);
 
+    // SDアクセス(ToolUpdater等)と共有SPIバスを取り合わないよう排他する
+    SpiBusLockGuard lock;
     canvas_->pushSprite(0, 0);
 }
 

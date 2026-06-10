@@ -18,7 +18,7 @@ class ResourceProvider {
 public:
     ResourceProvider();
 
-    bool beginSD(uint8_t csPin, SPIClass& spi = SPI, uint32_t frequency = 4000000);
+    bool beginSD(uint8_t csPin, SPIClass& spi = SPI, uint32_t frequency = 25000000);
     void useSD(bool available = true) { sdAvailable_ = available; }
     bool sdAvailable() const { return sdAvailable_; }
 
