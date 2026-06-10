@@ -37,6 +37,7 @@ public:
     void draw(LGFX_Sprite* canvas) const;
     bool menuOpen() const { return menuOpen_; }
     bool settingsOpen() const { return settingsOpen_; }
+    bool toolMenuOpen() const { return toolMenuOpen_; }
     bool uiVisible() const { return uiVisible_; }
     void setVirtualButtonsEnabled(bool enabled) { virtualButtonsEnabled_ = enabled; }
     bool virtualButtonsEnabled() const { return virtualButtonsEnabled_; }
@@ -70,11 +71,18 @@ private:
 
     enum class SettingsView : uint8_t {
         Root = 0,
+        Updates,
         Brightness,
         Speaker,
         WiFi,
         IdleMotion,
         Version,
+        ToolUpdate,
+    };
+
+    enum class ToolView : uint8_t {
+        Categories = 0,
+        Tools,
     };
 
     enum class HoldTarget : uint8_t {
@@ -93,13 +101,18 @@ private:
     ButtonAction buttonActions_[kButtonCount];
     bool uiVisible_;
     bool settingsOpen_;
+    bool toolMenuOpen_;
     bool menuOpen_;
     bool menuClosePending_;
     uint8_t selected_;
     uint8_t settingsSelected_;
     SettingsView settingsView_;
+    ToolView toolView_;
+    uint8_t toolCategorySelected_;
     int16_t settingsScrollOffset_;
     int16_t wifiScrollOffset_;
+    int16_t toolCategoryScrollOffset_;
+    int16_t toolScrollOffset_;
     bool settingsHoldActive_;
     HoldTarget settingsHoldTarget_;
     int8_t settingsHoldDelta_;
@@ -143,6 +156,9 @@ private:
     void setUiVisible(bool visible);
     void openSettings();
     void closeSettings();
+    void openToolMenu();
+    void closeToolMenu();
+    void handleToolBack();
     void handleTap(int16_t x, int16_t y);
     bool handleVirtualButtonTap(int16_t x, int16_t y);
     void updateHold(const m5::touch_detail_t& detail);
@@ -152,6 +168,7 @@ private:
     void closeMenu();
     void handleMenuTap(int16_t x, int16_t y);
     void handleSettingsTap(int16_t x, int16_t y);
+    void handleToolTap(int16_t x, int16_t y);
     bool updateSettingsHold(const m5::touch_detail_t& detail);
     void runMenuAction(uint8_t index);
     uint8_t menuItemCount() const;
@@ -170,6 +187,8 @@ private:
     void handleWifiTap(int16_t x, int16_t y);
     void handleIdleMotionTap(int16_t x, int16_t y);
     void handleVersionTap(int16_t x, int16_t y);
+    void handleUpdatesTap(int16_t x, int16_t y);
+    void handleToolUpdateTap(int16_t x, int16_t y);
     void adjustBrightness(int8_t delta);
     void adjustSpeakerVolume(int8_t delta);
     void adjustIdleMotionInterval(int8_t delta);
@@ -183,11 +202,19 @@ private:
     uint8_t wifiItemCount() const;
     UiRect wifiItemBounds(uint8_t visibleIndex) const;
     int8_t wifiIndexAt(int16_t x, int16_t y) const;
+    uint8_t visibleToolRows() const;
+    uint8_t toolCategoryCount() const;
+    uint8_t toolItemCount() const;
+    UiRect toolItemBounds(uint8_t visibleIndex) const;
+    int8_t toolIndexAt(int16_t x, int16_t y, bool categories) const;
     void scrollSettings(int8_t delta);
     void scrollWifi(int8_t delta);
+    void scrollTools(int8_t delta);
     const char* settingsTitle() const;
+    const char* toolTitle() const;
     void drawNetworkMenu(LGFX_Sprite* canvas) const;
     void drawSettings(LGFX_Sprite* canvas) const;
+    void drawToolMenu(LGFX_Sprite* canvas) const;
     void drawSettingsHeader(LGFX_Sprite* canvas, const char* title) const;
     void drawSettingsRoot(LGFX_Sprite* canvas) const;
     void drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) const;
@@ -196,6 +223,14 @@ private:
     void drawWifiSettings(LGFX_Sprite* canvas) const;
     void drawIdleMotionSettings(LGFX_Sprite* canvas) const;
     void drawVersionSettings(LGFX_Sprite* canvas) const;
+    void drawUpdatesSettings(LGFX_Sprite* canvas) const;
+    void drawToolUpdateSettings(LGFX_Sprite* canvas) const;
+    void drawUpdateMenuItem(LGFX_Sprite* canvas, uint8_t index, const char* label,
+                            const char* value) const;
+    void drawToolCategories(LGFX_Sprite* canvas) const;
+    void drawToolList(LGFX_Sprite* canvas) const;
+    void drawToolScrollIndicator(LGFX_Sprite* canvas, uint8_t total, uint8_t visible,
+                                 int16_t offset) const;
     void drawStepper(LGFX_Sprite* canvas, int value, int minValue, int maxValue, const char* unit) const;
     void drawAdjustButton(LGFX_Sprite* canvas, UiRect bounds, char symbol) const;
     void drawSettingsIcon(LGFX_Sprite* canvas, SettingsItem item, UiRect bounds) const;

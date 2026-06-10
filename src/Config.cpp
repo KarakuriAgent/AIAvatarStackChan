@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "FirmwareInfo.h"
 #include "IdleMotionEstimator.h"
 #include "ResourceProvider.h"
 
@@ -109,7 +110,8 @@ Config::Config()
     strlcpy(userId, "default", sizeof(userId));
     channel[0] = '\0';
     apiKey[0] = '\0';
-    otaManifestUrl[0] = '\0';
+    strlcpy(otaManifestUrl, kOtaManifestUrl, sizeof(otaManifestUrl));
+    strlcpy(toolManifestUrl, kToolManifestUrl, sizeof(toolManifestUrl));
     otaApiKey[0] = '\0';
     otaCaCert[0] = '\0';
     strlcpy(timezone, "JST-9", sizeof(timezone));
@@ -175,6 +177,7 @@ static bool applyJsonDocument(Config& config, JsonDocument& doc) {
     strlcpy(config.channel, doc["channel"] | config.channel, sizeof(config.channel));
     strlcpy(config.apiKey, doc["api_key"] | config.apiKey, sizeof(config.apiKey));
     strlcpy(config.otaManifestUrl, doc["ota_manifest_url"] | config.otaManifestUrl, sizeof(config.otaManifestUrl));
+    strlcpy(config.toolManifestUrl, doc["tool_manifest_url"] | config.toolManifestUrl, sizeof(config.toolManifestUrl));
     strlcpy(config.otaApiKey, doc["ota_api_key"] | config.otaApiKey, sizeof(config.otaApiKey));
     strlcpy(config.otaCaCert, doc["ota_ca_cert"] | config.otaCaCert, sizeof(config.otaCaCert));
     strlcpy(config.timezone, doc["timezone"] | config.timezone, sizeof(config.timezone));

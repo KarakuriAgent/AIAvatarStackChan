@@ -50,6 +50,7 @@ struct Config {
     char timezone[48];
     char apiKey[512];
     char otaManifestUrl[256];
+    char toolManifestUrl[256];
     char otaApiKey[160];
     char otaCaCert[2048];
     WifiNetworkConfig wifiNetworks[kMaxWifiNetworks];

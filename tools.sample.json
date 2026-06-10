@@ -1,0 +1,62 @@
+{
+  "motions": [
+    {
+      "name": "nod",
+      "frames": [
+        { "yaw": 0, "pitch": 120, "speed": 250, "hold_ms": 220 },
+        { "yaw": 0, "pitch": 420, "speed": 250, "hold_ms": 220 },
+        { "yaw": 0, "pitch": 200, "speed": 300, "hold_ms": 180 }
+      ]
+    },
+    {
+      "name": "shake",
+      "frames": [
+        { "yaw": -160, "pitch": 200, "speed": 300, "hold_ms": 180 },
+        { "yaw": 160, "pitch": 200, "speed": 300, "hold_ms": 180 },
+        { "yaw": 0, "pitch": 200, "speed": 300, "hold_ms": 160 }
+      ]
+    }
+  ],
+  "animations": [
+    {
+      "name": "sparkle",
+      "type": "jpeg_sequence",
+      "dir": "/animations/sparkle",
+      "pattern": "%03u.jpg",
+      "start": 0,
+      "count": 24,
+      "fps": 8,
+      "fit": "contain"
+    }
+  ],
+  "categories": [
+    {
+      "name": "Greeting",
+      "tools": [
+        {
+          "name": "local_greeting",
+          "label": "Greeting",
+          "actions": [
+            { "type": "motion", "name": "nod" },
+            { "type": "audio", "path": "/audio/greeting.wav" },
+            { "type": "animation", "name": "sparkle" },
+            { "type": "motion", "name": "home" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Reaction",
+      "tools": [
+        {
+          "name": "local_no",
+          "label": "No",
+          "actions": [
+            { "type": "motion", "name": "shake", "repeat": 2 },
+            { "type": "motion", "name": "home" }
+          ]
+        }
+      ]
+    }
+  ]
+}

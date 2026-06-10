@@ -48,6 +48,7 @@ AIAvatar::AIAvatar()
       websocketReady_(false),
       openClawReady_(false),
       deferredImagesLogged_(false),
+      toolUpdateReloaded_(false),
       deferredStartupStage_(0),
       deferredStartupNextMs_(0),
       heavyDeferredResumeMs_(0),
@@ -123,6 +124,7 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     idleAudioAccumulator_.reset();
     nextIdleMotionMs_ = 0;
     otaUpdater_.begin(config_);
+    toolUpdater_.begin(config_);
     volumeLevelIndex_ = nearestVolumeLevel(config_.speakerVolume);
     volume_ = config_.speakerVolume;
     speaker_.setAutoNormalize(config_.audioNormalizeTargetPeak,
@@ -153,6 +155,7 @@ bool AIAvatar::beginFast() {
     face_.setDeferredLoadingEnabled(false);
     statusOverlay_.setEnabled(config_.statusOverlayEnabled);
     systemUI_.begin(*this, config_, statusOverlay_);
+    toolActions_.begin(*this, defaultResources_);
     leds_.begin(config_);
     stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
     motion_.begin(config_.pitchHome);
@@ -230,6 +233,7 @@ bool AIAvatar::beginNormal() {
     face_.setDeferredLoadingEnabled(false);
     statusOverlay_.setEnabled(config_.statusOverlayEnabled);
     systemUI_.begin(*this, config_, statusOverlay_);
+    toolActions_.begin(*this, defaultResources_);
     leds_.begin(config_);
     stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
     motion_.begin(config_.pitchHome);
@@ -321,8 +325,16 @@ void AIAvatar::update() {
     }
     updateWiFi();
     systemUI_.update();
+    toolActions_.update();
     updatePersistedSettings();
     if (otaUpdater_.consumeChanged()) {
+        display_.setDirty();
+    }
+    if (toolUpdater_.consumeChanged()) {
+        if (toolUpdater_.status() == OtaUpdateStatus::UpdateSucceeded && !toolUpdateReloaded_) {
+            toolActions_.reload();
+            toolUpdateReloaded_ = true;
+        }
         display_.setDirty();
     }
     if (config_.fastStartup && deferredStartupStage_ >= 7) {
@@ -334,7 +346,8 @@ void AIAvatar::update() {
         deferredImagesLogged_ = true;
         logMemoryUsage("after deferred images");
     }
-    motion_.update(playbackActive_ && !systemUI_.settingsOpen());
+    motion_.update(playbackActive_ && !systemUI_.settingsOpen() &&
+                   !systemUI_.toolMenuOpen() && !toolActions_.motionRunning());
     leds_.update();
     openClaw_.update();
     if (visualEffects_.update()) {
@@ -415,7 +428,8 @@ void AIAvatar::updateDeferredStartup() {
 bool AIAvatar::canRunHeavyDeferredWork() const {
     uint32_t now = millis();
     if (static_cast<int32_t>(now - heavyDeferredResumeMs_) < 0) return false;
-    return !pushToTalkActive_ && !pttSendPending_ && !serverProcessing_ && !playbackActive_;
+    return !pushToTalkActive_ && !pttSendPending_ && !serverProcessing_ && !playbackActive_ &&
+           !toolUpdater_.busy();
 }
 
 void AIAvatar::beginDeferredWiFi() {
@@ -491,6 +505,23 @@ bool AIAvatar::startFirmwareUpdate() {
         wsDisconnectPending_ = true;
     }
     bool ok = otaUpdater_.startUpdate();
+    display_.setDirty();
+    return ok;
+}
+
+bool AIAvatar::checkForToolUpdate() {
+    resetSleepTimer("tool update check");
+    bool ok = toolUpdater_.checkForUpdate();
+    display_.setDirty();
+    return ok;
+}
+
+bool AIAvatar::startToolUpdate() {
+    resetSleepTimer("tool update");
+    cancelPlayback();
+    toolActions_.cancel();
+    toolUpdateReloaded_ = false;
+    bool ok = toolUpdater_.startUpdate();
     display_.setDirty();
     return ok;
 }
@@ -744,6 +775,9 @@ void AIAvatar::runMicCapture() {
             bool idleMotionAllowed = config_.idleMotionEnabled && !serverProcessing_ &&
                                      !pushToTalkActive_ && !pttSendPending_ &&
                                      !systemUI_.settingsOpen() &&
+                                     !systemUI_.toolMenuOpen() &&
+                                     !toolActions_.running() &&
+                                     !toolUpdater_.busy() &&
                                      !motion_.isNadeActive();
             if (idleMotionAllowed) {
                 if (idleMotionCooldownReady(now, nextIdleMotionMs_)) {
@@ -1506,10 +1540,13 @@ void AIAvatar::onToolCallStatic(const char* toolName) {
     s_instance->resetSleepTimer("tool call");
     s_instance->visualEffects_.showToolPulse();
     s_instance->display_.setDirty();
-    if (!s_instance->openClaw_.handleToolCall(toolName)) {
+    bool builtInHandled = s_instance->openClaw_.handleToolCall(toolName);
+    bool sdHandled = false;
+    if (!builtInHandled && !s_instance->toolUpdater_.busy()) {
         s_instance->leds_.startToolPulse();
+        sdHandled = s_instance->toolActions_.execute(toolName);
     }
-    if (s_instance->userToolCallCb_) s_instance->userToolCallCb_(toolName);
+    if (!sdHandled && s_instance->userToolCallCb_) s_instance->userToolCallCb_(toolName);
 }
 
 void AIAvatar::onVisionStatic() {
@@ -1556,6 +1593,7 @@ void AIAvatar::onNadeStatic() {
 void AIAvatar::drawOverlayStatic(LGFX_Sprite* canvas) {
     if (!s_instance) return;
     s_instance->visualEffects_.draw(canvas);
+    s_instance->toolActions_.drawAnimation(canvas);
     if (s_instance->systemUI_.uiVisible()) {
         s_instance->statusOverlay_.draw(canvas);
     }

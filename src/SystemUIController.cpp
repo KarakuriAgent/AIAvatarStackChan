@@ -65,13 +65,18 @@ SystemUIController::SystemUIController()
       buttonActions_{ButtonAction::VolumeCycle, ButtonAction::None, ButtonAction::None},
       uiVisible_(true),
       settingsOpen_(false),
+      toolMenuOpen_(false),
       menuOpen_(false),
       menuClosePending_(false),
       selected_(0),
       settingsSelected_(0),
       settingsView_(SettingsView::Root),
+      toolView_(ToolView::Categories),
+      toolCategorySelected_(0),
       settingsScrollOffset_(0),
       wifiScrollOffset_(0),
+      toolCategoryScrollOffset_(0),
+      toolScrollOffset_(0),
       settingsHoldActive_(false),
       settingsHoldTarget_(HoldTarget::None),
       settingsHoldDelta_(0),
@@ -126,6 +131,9 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
 
     if (settingsOpen_) {
         drawSettings(canvas);
+    }
+    if (toolMenuOpen_) {
+        drawToolMenu(canvas);
     }
     if (menuOpen_) {
         drawNetworkMenu(canvas);
@@ -193,6 +201,9 @@ void SystemUIController::drawSettings(LGFX_Sprite* canvas) const {
         case SettingsView::Root:
             drawSettingsRoot(canvas);
             break;
+        case SettingsView::Updates:
+            drawUpdatesSettings(canvas);
+            break;
         case SettingsView::Brightness:
             drawBrightnessSettings(canvas);
             break;
@@ -207,6 +218,35 @@ void SystemUIController::drawSettings(LGFX_Sprite* canvas) const {
             break;
         case SettingsView::Version:
             drawVersionSettings(canvas);
+            break;
+        case SettingsView::ToolUpdate:
+            drawToolUpdateSettings(canvas);
+            break;
+    }
+}
+
+void SystemUIController::drawToolMenu(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    canvas->fillRect(0, 0, canvas->width(), canvas->height(), 0x0841);
+    drawSettingsHeader(canvas, toolTitle());
+
+    if (!avatar_->tools().hasTools()) {
+        const char* message = "ツール設定がありません";
+        canvas->setFont(&fonts::lgfxJapanGothic_20);
+        canvas->setTextSize(1);
+        canvas->setTextColor(0xC618);
+        canvas->setTextDatum(top_center);
+        canvas->drawString(message, canvas->width() / 2, kSettingsHeaderHeight + 56);
+        return;
+    }
+
+    switch (toolView_) {
+        case ToolView::Categories:
+            drawToolCategories(canvas);
+            break;
+        case ToolView::Tools:
+            drawToolList(canvas);
             break;
     }
 }
@@ -314,8 +354,8 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
                      idleMotionTypeLabel(avatar_->idleMotionType()));
             break;
         case SettingsItem::Version:
-            label = "バージョン";
-            copyTruncated(value, sizeof(value), avatar_->firmwareVersion(), 18);
+            label = "アップデート";
+            snprintf(value, sizeof(value), "FW / ツール");
             break;
         case SettingsItem::Count:
         default:
@@ -343,6 +383,113 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
         canvas->drawLine(x - 4, cy - 7, x + 4, cy, 0xC618);
         canvas->drawLine(x + 4, cy, x - 4, cy + 7, 0xC618);
     }
+}
+
+void SystemUIController::drawToolCategories(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    uint8_t total = toolCategoryCount();
+    uint8_t visibleRows = visibleToolRows();
+    for (uint8_t visible = 0; visible < visibleRows; ++visible) {
+        uint8_t index = toolCategoryScrollOffset_ + visible;
+        if (index >= total) break;
+
+        UiRect row = toolItemBounds(visible);
+        canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
+        canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
+                              row.w - kSettingsRowPaddingX * 2, 0x3186);
+
+        char name[48];
+        copyTruncated(name, sizeof(name), avatar_->tools().categoryName(index), 18);
+        canvas->setFont(&fonts::lgfxJapanGothic_20);
+        canvas->setTextSize(1);
+        canvas->setTextDatum(top_left);
+        canvas->setTextColor(TFT_WHITE);
+        int nameY = row.y + (row.h - canvas->fontHeight()) / 2;
+        canvas->drawString(name, row.x + kSettingsRowPaddingX, nameY);
+
+        char count[16];
+        snprintf(count, sizeof(count), "%u", avatar_->tools().toolCount(index));
+        canvas->setFont(&fonts::lgfxJapanGothic_16);
+        canvas->setTextColor(0xC618);
+        int countW = canvas->textWidth(count);
+        int countY = row.y + (row.h - canvas->fontHeight()) / 2;
+        canvas->drawString(count, row.x + row.w - kSettingsRowPaddingX - countW - 18, countY);
+
+        int cy = row.y + row.h / 2;
+        int x = row.x + row.w - kSettingsRowPaddingX - 9;
+        canvas->drawLine(x - 4, cy - 7, x + 4, cy, 0xC618);
+        canvas->drawLine(x + 4, cy, x - 4, cy + 7, 0xC618);
+    }
+
+    drawToolScrollIndicator(canvas, total, visibleRows, toolCategoryScrollOffset_);
+}
+
+void SystemUIController::drawToolList(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    uint8_t total = toolItemCount();
+    if (total == 0) {
+        const char* message = "ツールがありません";
+        canvas->setFont(&fonts::lgfxJapanGothic_20);
+        canvas->setTextSize(1);
+        canvas->setTextColor(0xC618);
+        canvas->setTextDatum(top_center);
+        canvas->drawString(message, canvas->width() / 2, kSettingsHeaderHeight + 56);
+        return;
+    }
+
+    uint8_t visibleRows = visibleToolRows();
+    for (uint8_t visible = 0; visible < visibleRows; ++visible) {
+        uint8_t index = toolScrollOffset_ + visible;
+        if (index >= total) break;
+
+        UiRect row = toolItemBounds(visible);
+        canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
+        canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
+                              row.w - kSettingsRowPaddingX * 2, 0x3186);
+
+        char label[48];
+        char name[48];
+        copyTruncated(label, sizeof(label),
+                      avatar_->tools().toolLabel(toolCategorySelected_, index), 18);
+        copyTruncated(name, sizeof(name),
+                      avatar_->tools().toolName(toolCategorySelected_, index), 24);
+
+        canvas->setTextDatum(top_left);
+        canvas->setTextSize(1);
+        canvas->setFont(&fonts::lgfxJapanGothic_16);
+        canvas->setTextColor(TFT_WHITE);
+        canvas->drawString(label, row.x + kSettingsRowPaddingX, row.y + 6);
+
+        if (strcmp(label, name) != 0 && name[0]) {
+            canvas->setFont(&fonts::lgfxJapanGothic_12);
+            canvas->setTextColor(0x8410);
+            canvas->drawString(name, row.x + kSettingsRowPaddingX, row.y + 27);
+        }
+
+        int cy = row.y + row.h / 2;
+        int x = row.x + row.w - kSettingsRowPaddingX - 15;
+        canvas->fillTriangle(x - 3, cy - 8, x - 3, cy + 8, x + 9, cy, TFT_GREEN);
+    }
+
+    drawToolScrollIndicator(canvas, total, visibleRows, toolScrollOffset_);
+}
+
+void SystemUIController::drawToolScrollIndicator(LGFX_Sprite* canvas, uint8_t total,
+                                                 uint8_t visible, int16_t offset) const {
+    if (!canvas || total <= visible) return;
+
+    int indicatorX = canvas->width() - 5;
+    int trackY = kSettingsHeaderHeight + 8;
+    int trackH = canvas->height() - kSettingsHeaderHeight - 16;
+    canvas->drawFastVLine(indicatorX, trackY, trackH, 0x4208);
+    int thumbH = trackH * visible / total;
+    if (thumbH < 12) thumbH = 12;
+    int maxOffset = total - visible;
+    int thumbY = trackY;
+    if (maxOffset > 0) thumbY += (trackH - thumbH) * offset / maxOffset;
+    canvas->fillRoundRect(indicatorX - 2, thumbY, 4, thumbH, 2, 0xC618);
 }
 
 void SystemUIController::drawBrightnessSettings(LGFX_Sprite* canvas) const {
@@ -530,6 +677,112 @@ void SystemUIController::drawVersionSettings(LGFX_Sprite* canvas) const {
                         !busy && avatar_->otaUpdateAvailable());
 }
 
+void SystemUIController::drawUpdatesSettings(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    char firmwareValue[48];
+    const OtaManifest& firmwareManifest = avatar_->otaManifest();
+    if (avatar_->otaUpdateAvailable() && firmwareManifest.version[0]) {
+        snprintf(firmwareValue, sizeof(firmwareValue), "%s", firmwareManifest.version);
+    } else {
+        copyTruncated(firmwareValue, sizeof(firmwareValue), avatar_->otaStatusMessage(), 18);
+    }
+
+    char toolValue[48];
+    const ToolManifest& toolManifest = avatar_->toolManifest();
+    if (avatar_->toolUpdateAvailable() && toolManifest.version[0]) {
+        snprintf(toolValue, sizeof(toolValue), "%s", toolManifest.version);
+    } else {
+        copyTruncated(toolValue, sizeof(toolValue), avatar_->toolUpdateStatusMessage(), 18);
+    }
+
+    drawUpdateMenuItem(canvas, 0, "ファームウェア", firmwareValue);
+    drawUpdateMenuItem(canvas, 1, "ツール設定", toolValue);
+}
+
+void SystemUIController::drawToolUpdateSettings(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    const int left = 18;
+    int y = kSettingsHeaderHeight + 10;
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(top_left);
+
+    auto drawLabelValue = [&](const char* label, const char* value) {
+        char text[96];
+        snprintf(text, sizeof(text), "%s: %s", label, value && value[0] ? value : "-");
+        canvas->setTextColor(0xC618);
+        canvas->drawString(text, left, y);
+        y += 20;
+    };
+
+    drawLabelValue("現在", avatar_->toolLocalVersion());
+
+    const ToolManifest& manifest = avatar_->toolManifest();
+    if (manifest.version[0]) {
+        char latest[72];
+        if (manifest.releaseDate[0]) {
+            snprintf(latest, sizeof(latest), "%s %s", manifest.version, manifest.releaseDate);
+        } else {
+            strlcpy(latest, manifest.version, sizeof(latest));
+        }
+        drawLabelValue("最新", latest);
+    } else {
+        drawLabelValue("最新", "未確認");
+    }
+
+    char status[96];
+    copyTruncated(status, sizeof(status), avatar_->toolUpdateStatusMessage(), 28);
+    drawLabelValue("状態", status);
+
+    int progress = avatar_->toolUpdateProgressPercent();
+    if (avatar_->toolUpdateStatus() == OtaUpdateStatus::Updating && progress >= 0) {
+        int barX = left;
+        int barY = y + 2;
+        int barW = canvas->width() - left * 2;
+        int barH = 10;
+        canvas->drawRoundRect(barX, barY, barW, barH, 3, 0x8410);
+        int fillW = (barW - 2) * progress / 100;
+        if (fillW > 0) canvas->fillRoundRect(barX + 1, barY + 1, fillW, barH - 2, 2, TFT_GREEN);
+    }
+
+    bool busy = avatar_->toolUpdateBusy();
+    drawOtaActionButton(canvas, otaCheckButtonBounds(), "更新確認", !busy);
+    drawOtaActionButton(canvas, otaUpdateButtonBounds(), "更新実行",
+                        !busy && avatar_->toolUpdateAvailable());
+}
+
+void SystemUIController::drawUpdateMenuItem(LGFX_Sprite* canvas, uint8_t index,
+                                            const char* label, const char* value) const {
+    if (!canvas) return;
+
+    UiRect row = settingsItemBounds(index);
+    canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
+    canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
+                          row.w - kSettingsRowPaddingX * 2, 0x3186);
+
+    canvas->setFont(&fonts::lgfxJapanGothic_20);
+    canvas->setTextSize(1);
+    canvas->setTextDatum(top_left);
+    canvas->setTextColor(TFT_WHITE);
+    int labelY = row.y + (row.h - canvas->fontHeight()) / 2;
+    canvas->drawString(label, row.x + kSettingsRowPaddingX, labelY);
+
+    char clipped[48];
+    copyTruncated(clipped, sizeof(clipped), value, 18);
+    canvas->setFont(&fonts::lgfxJapanGothic_16);
+    canvas->setTextColor(0xC618);
+    int valueW = canvas->textWidth(clipped);
+    int valueY = row.y + (row.h - canvas->fontHeight()) / 2;
+    canvas->drawString(clipped, row.x + row.w - kSettingsRowPaddingX - valueW - 18, valueY);
+
+    int cy = row.y + row.h / 2;
+    int x = row.x + row.w - kSettingsRowPaddingX - 9;
+    canvas->drawLine(x - 4, cy - 7, x + 4, cy, 0xC618);
+    canvas->drawLine(x + 4, cy, x - 4, cy + 7, 0xC618);
+}
+
 void SystemUIController::drawStepper(LGFX_Sprite* canvas, int value, int minValue, int maxValue,
                                      const char* unit) const {
     if (!canvas) return;
@@ -680,10 +933,17 @@ void SystemUIController::runButtonAction(ButtonId id) {
 }
 
 void SystemUIController::handleTap(int16_t x, int16_t y) {
-    if (!settingsOpen_ && uiVisible_ && statusOverlay_->speakerBounds().contains(x, y)) {
+    if (!settingsOpen_ && !toolMenuOpen_ && uiVisible_ &&
+        statusOverlay_->speakerBounds().contains(x, y)) {
         avatar_->toggleSpeakerMuted();
         return;
     }
+
+    if (toolMenuOpen_) {
+        handleToolTap(x, y);
+        return;
+    }
+
     if (avatar_->cancelPlayback()) {
         return;
     }
@@ -729,7 +989,7 @@ bool SystemUIController::handleVirtualButtonTap(int16_t x, int16_t y) {
 }
 
 void SystemUIController::updateHold(const m5::touch_detail_t& detail) {
-    if (menuOpen_ || settingsOpen_) return;
+    if (menuOpen_ || settingsOpen_ || toolMenuOpen_) return;
 
     if (touchActive_ && !touchHeld_ && detail.isPressed()) {
         if (millis() - touchStartMs_ >= config_->pttHoldThresholdMs &&
@@ -828,6 +1088,7 @@ void SystemUIController::openSettings() {
     if (!uiVisible_) return;
 
     settingsOpen_ = true;
+    toolMenuOpen_ = false;
     settingsView_ = SettingsView::Root;
     menuOpen_ = false;
     menuClosePending_ = false;
@@ -849,6 +1110,47 @@ void SystemUIController::closeSettings() {
     settingsHoldActive_ = false;
     settingsHoldTarget_ = HoldTarget::None;
     avatar_->display().setDirty();
+}
+
+void SystemUIController::openToolMenu() {
+    if (!uiVisible_) return;
+
+    toolMenuOpen_ = true;
+    settingsOpen_ = false;
+    settingsView_ = SettingsView::Root;
+    settingsHoldActive_ = false;
+    settingsHoldTarget_ = HoldTarget::None;
+    menuOpen_ = false;
+    menuClosePending_ = false;
+    toolView_ = ToolView::Categories;
+    toolCategorySelected_ = 0;
+    toolCategoryScrollOffset_ = 0;
+    toolScrollOffset_ = 0;
+    avatar_->motion().goHome();
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::closeToolMenu() {
+    if (!toolMenuOpen_) return;
+
+    toolMenuOpen_ = false;
+    toolView_ = ToolView::Categories;
+    toolCategorySelected_ = 0;
+    toolCategoryScrollOffset_ = 0;
+    toolScrollOffset_ = 0;
+    menuOpen_ = false;
+    menuClosePending_ = false;
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::handleToolBack() {
+    if (toolView_ == ToolView::Tools) {
+        toolView_ = ToolView::Categories;
+        toolScrollOffset_ = 0;
+        avatar_->display().setDirty();
+        return;
+    }
+    closeToolMenu();
 }
 
 void SystemUIController::recordTouch(const m5::touch_detail_t& detail) {
@@ -886,6 +1188,21 @@ bool SystemUIController::consumeSwipe(const m5::touch_detail_t& detail) {
     int16_t dy = touchLastY_ - touchStartY_;
     bool horizontal = abs(dy) <= kSwipeMaxVertical && abs(dx) > abs(dy);
 
+    if (toolMenuOpen_) {
+        if (horizontal && dx <= -kSwipeThreshold) {
+            touchActive_ = false;
+            handleToolBack();
+            return true;
+        }
+        bool vertical = abs(dx) <= kSwipeMaxHorizontal && abs(dy) >= kSwipeThreshold;
+        if (vertical) {
+            touchActive_ = false;
+            scrollTools(dy < 0 ? 1 : -1);
+            return true;
+        }
+        return false;
+    }
+
     if (settingsOpen_) {
         if (horizontal && dx >= kSwipeThreshold) {
             touchActive_ = false;
@@ -912,6 +1229,12 @@ bool SystemUIController::consumeSwipe(const m5::touch_detail_t& detail) {
         return true;
     }
 
+    if (!menuOpen_ && uiVisible_ && horizontal && dx >= kSwipeThreshold) {
+        touchActive_ = false;
+        openToolMenu();
+        return true;
+    }
+
     return false;
 }
 
@@ -926,6 +1249,11 @@ void SystemUIController::setUiVisible(bool visible) {
         }
         settingsOpen_ = false;
         settingsView_ = SettingsView::Root;
+        toolMenuOpen_ = false;
+        toolView_ = ToolView::Categories;
+        toolCategorySelected_ = 0;
+        toolCategoryScrollOffset_ = 0;
+        toolScrollOffset_ = 0;
     }
     avatar_->display().setDirty();
 }
@@ -956,6 +1284,9 @@ void SystemUIController::handleSettingsTap(int16_t x, int16_t y) {
         case SettingsView::Root:
             handleSettingsRootTap(x, y);
             break;
+        case SettingsView::Updates:
+            handleUpdatesTap(x, y);
+            break;
         case SettingsView::Brightness:
             handleBrightnessTap(x, y);
             break;
@@ -971,6 +1302,34 @@ void SystemUIController::handleSettingsTap(int16_t x, int16_t y) {
         case SettingsView::Version:
             handleVersionTap(x, y);
             break;
+        case SettingsView::ToolUpdate:
+            handleToolUpdateTap(x, y);
+            break;
+    }
+}
+
+void SystemUIController::handleToolTap(int16_t x, int16_t y) {
+    if (!avatar_) return;
+
+    if (settingsBackBounds().contains(x, y)) {
+        handleToolBack();
+        return;
+    }
+
+    if (toolView_ == ToolView::Categories) {
+        int8_t index = toolIndexAt(x, y, true);
+        if (index < 0) return;
+        toolCategorySelected_ = static_cast<uint8_t>(index);
+        toolView_ = ToolView::Tools;
+        toolScrollOffset_ = 0;
+        avatar_->display().setDirty();
+        return;
+    }
+
+    int8_t index = toolIndexAt(x, y, false);
+    if (index < 0) return;
+    if (avatar_->tools().execute(toolCategorySelected_, static_cast<uint8_t>(index))) {
+        closeToolMenu();
     }
 }
 
@@ -1028,6 +1387,30 @@ void SystemUIController::handleVersionTap(int16_t x, int16_t y) {
     }
 }
 
+void SystemUIController::handleUpdatesTap(int16_t x, int16_t y) {
+    (void)x;
+    if (y < kSettingsHeaderHeight) return;
+    uint8_t index = (y - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (index == 0) {
+        settingsView_ = SettingsView::Version;
+        avatar_->display().setDirty();
+    } else if (index == 1) {
+        settingsView_ = SettingsView::ToolUpdate;
+        avatar_->display().setDirty();
+    }
+}
+
+void SystemUIController::handleToolUpdateTap(int16_t x, int16_t y) {
+    if (otaCheckButtonBounds().contains(x, y)) {
+        avatar_->checkForToolUpdate();
+        return;
+    }
+    if (otaUpdateButtonBounds().contains(x, y) && avatar_->toolUpdateAvailable() &&
+        !avatar_->toolUpdateBusy()) {
+        avatar_->startToolUpdate();
+    }
+}
+
 void SystemUIController::runMenuAction(uint8_t index) {
     if (!avatar_) return;
 
@@ -1064,7 +1447,7 @@ void SystemUIController::runSettingsAction(uint8_t index) {
             settingsView_ = SettingsView::IdleMotion;
             break;
         case SettingsItem::Version:
-            settingsView_ = SettingsView::Version;
+            settingsView_ = SettingsView::Updates;
             break;
         case SettingsItem::Count:
         default:
@@ -1075,6 +1458,11 @@ void SystemUIController::runSettingsAction(uint8_t index) {
 void SystemUIController::handleSettingsBack() {
     if (settingsView_ == SettingsView::Root) {
         closeSettings();
+        return;
+    }
+    if (settingsView_ == SettingsView::Version || settingsView_ == SettingsView::ToolUpdate) {
+        settingsView_ = SettingsView::Updates;
+        avatar_->display().setDirty();
         return;
     }
     settingsView_ = SettingsView::Root;
@@ -1244,6 +1632,42 @@ int8_t SystemUIController::wifiIndexAt(int16_t x, int16_t y) const {
     return static_cast<int8_t>(index);
 }
 
+uint8_t SystemUIController::visibleToolRows() const {
+    int rows = (M5.Display.height() - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (rows < 1) return 1;
+    return static_cast<uint8_t>(rows);
+}
+
+uint8_t SystemUIController::toolCategoryCount() const {
+    return avatar_ ? avatar_->tools().categoryCount() : 0;
+}
+
+uint8_t SystemUIController::toolItemCount() const {
+    if (!avatar_) return 0;
+    if (toolView_ == ToolView::Categories) return avatar_->tools().categoryCount();
+    return avatar_->tools().toolCount(toolCategorySelected_);
+}
+
+UiRect SystemUIController::toolItemBounds(uint8_t visibleIndex) const {
+    int displayW = M5.Display.width();
+    int y = kSettingsHeaderHeight + visibleIndex * kSettingsRowHeight;
+    return {0, static_cast<int16_t>(y), static_cast<int16_t>(displayW), kSettingsRowHeight};
+}
+
+int8_t SystemUIController::toolIndexAt(int16_t x, int16_t y, bool categories) const {
+    (void)x;
+    if (y < kSettingsHeaderHeight) return -1;
+    uint8_t visibleIndex = (y - kSettingsHeaderHeight) / kSettingsRowHeight;
+    if (visibleIndex >= visibleToolRows()) return -1;
+
+    uint8_t offset = categories ? toolCategoryScrollOffset_ : toolScrollOffset_;
+    uint8_t total = categories ? toolCategoryCount()
+                               : (avatar_ ? avatar_->tools().toolCount(toolCategorySelected_) : 0);
+    uint8_t index = offset + visibleIndex;
+    if (index >= total) return -1;
+    return static_cast<int8_t>(index);
+}
+
 void SystemUIController::scrollSettings(int8_t delta) {
     uint8_t total = settingsItemCount();
     uint8_t visible = visibleSettingsRows();
@@ -1268,10 +1692,31 @@ void SystemUIController::scrollWifi(int8_t delta) {
     avatar_->display().setDirty();
 }
 
+void SystemUIController::scrollTools(int8_t delta) {
+    uint8_t total = toolItemCount();
+    uint8_t visible = visibleToolRows();
+    int maxOffset = total > visible ? total - visible : 0;
+    int offset = (toolView_ == ToolView::Categories ? toolCategoryScrollOffset_ : toolScrollOffset_) +
+                 delta;
+    if (offset < 0) offset = 0;
+    if (offset > maxOffset) offset = maxOffset;
+
+    if (toolView_ == ToolView::Categories) {
+        if (toolCategoryScrollOffset_ == offset) return;
+        toolCategoryScrollOffset_ = offset;
+    } else {
+        if (toolScrollOffset_ == offset) return;
+        toolScrollOffset_ = offset;
+    }
+    avatar_->display().setDirty();
+}
+
 const char* SystemUIController::settingsTitle() const {
     switch (settingsView_) {
         case SettingsView::Root:
             return "設定";
+        case SettingsView::Updates:
+            return "アップデート";
         case SettingsView::Brightness:
             return "ライト";
         case SettingsView::Speaker:
@@ -1281,9 +1726,19 @@ const char* SystemUIController::settingsTitle() const {
         case SettingsView::IdleMotion:
             return "待機モーション";
         case SettingsView::Version:
-            return "バージョン";
+            return "ファームウェア";
+        case SettingsView::ToolUpdate:
+            return "ツール設定";
     }
     return "設定";
+}
+
+const char* SystemUIController::toolTitle() const {
+    if (toolView_ == ToolView::Tools && avatar_) {
+        const char* name = avatar_->tools().categoryName(toolCategorySelected_);
+        if (name && name[0]) return name;
+    }
+    return "ツール";
 }
 
 UiRect SystemUIController::otaCheckButtonBounds() const {

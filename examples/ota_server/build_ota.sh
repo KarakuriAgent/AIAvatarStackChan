@@ -78,6 +78,9 @@ if [[ ! "$BASE_URL" =~ ^https:// ]]; then
   echo "OTA public base URL must start with https://: $BASE_URL"
   exit 1
 fi
+BASE_URL="${BASE_URL%/}/"
+OTA_MANIFEST_URL="${BASE_URL}manifest.json"
+TOOL_MANIFEST_URL="${BASE_URL}tools/manifest.json"
 
 if [[ ! -x "$PIO_BIN" ]]; then
   if command -v pio >/dev/null 2>&1; then
@@ -95,11 +98,15 @@ cat > "$FIRMWARE_INFO" <<EOF
 
 #define AIAVATAR_FIRMWARE_VERSION "$VERSION"
 #define AIAVATAR_FIRMWARE_RELEASE_DATE "$RELEASE_DATE"
+#define AIAVATAR_OTA_MANIFEST_URL "$OTA_MANIFEST_URL"
+#define AIAVATAR_TOOL_MANIFEST_URL "$TOOL_MANIFEST_URL"
 EOF
 
 echo "Firmware version: $VERSION"
 echo "Release date: $RELEASE_DATE"
 echo "Public base URL: $BASE_URL"
+echo "Firmware manifest URL: $OTA_MANIFEST_URL"
+echo "Tool manifest URL: $TOOL_MANIFEST_URL"
 echo "Generated: $FIRMWARE_INFO"
 
 if [[ -d "$PRIVATE_ASSETS" ]]; then

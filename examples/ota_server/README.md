@@ -1,6 +1,6 @@
 # OTA Server
 
-Small authenticated OTA server for AIAvatarStackChan firmware updates.
+Small authenticated OTA server for AIAvatarStackChan firmware and tool updates.
 Run it behind Cloudflare HTTPS. The device accesses the Cloudflare HTTPS URL,
 while this local server can stay plain HTTP behind the tunnel/proxy.
 
@@ -22,7 +22,16 @@ examples/ota_server/build_ota.sh \
 ```
 
 The script also writes `src/FirmwareInfoGenerated.h`, which is ignored by git,
-so the version shown on the device matches the generated manifest.
+so the version shown on the device matches the generated manifest. The same
+generated header bakes these default update URLs into the firmware:
+
+```text
+<OTA_PUBLIC_BASE_URL>/manifest.json
+<OTA_PUBLIC_BASE_URL>/tools/manifest.json
+```
+
+`config.json` can still override them with `ota_manifest_url` and
+`tool_manifest_url`.
 
 ## Generate manifest only
 
@@ -35,6 +44,32 @@ python3 examples/ota_server/generate_manifest.py \
   --output examples/ota_server/dist/manifest.json
 cp examples/stackchan/basic/.pio/build/cores3/firmware.bin examples/ota_server/dist/firmware.bin
 ```
+
+## Stage Tool Release
+
+Tool updates use the same server and Bearer token, but a separate endpoint:
+
+```text
+/tools/manifest.json
+/tools/tools.zip
+```
+
+Stage a tool SD-root release:
+
+```sh
+examples/ota_server/stage_tools.sh
+```
+
+By default, `stage_tools.sh` uses `TOOL_SOURCE_DIR` from `.env`, or the first
+existing directory containing `tools.json` from `private/tool_assets/sdroot`,
+and `sdcard`. It uses `OTA_PUBLIC_BASE_URL` and `OTA_ROOT` from `.env`, so an
+already running server will serve the newly staged files as soon as they are
+written.
+
+The script creates a store-only ZIP archive so the firmware can extract it
+without a deflate library. The device downloads `/tools/tools.zip`, verifies
+size and SHA-256 from `/tools/manifest.json`, validates the packaged
+`tools.json`, then expands the package to the SD card root.
 
 ## Serve
 
@@ -61,11 +96,12 @@ Device config:
 ```json
 {
   "ota_manifest_url": "https://ota.example.com/manifest.json",
+  "tool_manifest_url": "https://ota.example.com/tools/manifest.json",
   "ota_api_key": "change-me"
 }
 ```
 
-Both `manifest.json` and `firmware.bin` require:
+Firmware and tool update files require:
 
 ```http
 Authorization: Bearer <ota_api_key>

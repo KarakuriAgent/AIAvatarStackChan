@@ -121,6 +121,40 @@ Here are the default controls built into the firmware.
 - 👀 Say something like "look at this" and StackChan will automatically snap a photo, send it to the server, and respond based on what it sees.
 - 👋 Pet the top of StackChan's body and it will react with a cute response.
 - ☝️ Swipe up on the screen to hide the clock and status icons. Swipe down from the top edge to bring them back.
+- 👉 Swipe right to open local SD tools. Swipe left opens settings.
+
+### Local SD tools
+
+Put `tools.json` on the SD card to define local tools that can be run from the left-side UI or by a server `tool_call` whose `name` matches a tool name. The built-in OpenClaw tool name keeps priority; other matching names run from SD. See `tools.sample.json` for a complete example.
+
+Supported initial action types:
+
+- `motion`: plays a motion from `motions[]` by `name`. `home` returns the head to neutral. Yaw is clamped to `-200..200`, pitch to `pitch_home - 100 .. pitch_home + 300`, speed to `50..2000`, and hold time to `20..5000` ms.
+- `audio`: plays a PCM16 WAV file from `path`. Mono and stereo are supported; stereo is downmixed to mono.
+- `animation`: plays a JPEG sequence from `animations[]`. Use `dir`, `pattern`, `start`, `count`, and `fps` so frames can live in a folder instead of being listed one by one.
+
+Actions run in the order listed. Unknown action types are skipped, so future firmware can add handlers without breaking existing configs.
+
+To update local tools without rewriting the SD card, package a tool SD-root directory and serve a tool manifest from the OTA server. `build_ota.sh` bakes both the firmware and tool manifest URLs into the firmware from `OTA_PUBLIC_BASE_URL`; `config.json` can still override them with `ota_manifest_url` and `tool_manifest_url`. The tool updater uses the same `ota_api_key` and `ota_ca_cert` as firmware OTA.
+
+```json
+{
+  "ota_manifest_url": "https://ota.example.com/manifest.json",
+  "tool_manifest_url": "https://ota.example.com/tools/manifest.json",
+  "ota_api_key": "change-me"
+}
+```
+
+On the server side, put `tools.json` and referenced assets such as WAV and JPEG frames in the tool source directory, then stage a tool release with:
+
+```sh
+examples/ota_server/stage_tools.sh
+```
+
+The script reads `TOOL_SOURCE_DIR`, `OTA_PUBLIC_BASE_URL`, and `OTA_ROOT` from
+`examples/ota_server/.env` when present. It creates `/tools/tools.zip` and
+`/tools/manifest.json` under the OTA root. The ZIP is store-only and expands to
+the SD card root on the device after manifest size/SHA-256 verification.
 
 
 ## ⚙️ Configuration
@@ -137,6 +171,10 @@ Here are the default controls built into the firmware.
 - `ws_path` (string): AIAvatarKit WebSocket server path
 - `user_id` (string): user ID sent when connecting to the WebSocket server
 - `channel` (string): channel name sent when connecting to the WebSocket server
+- `ota_manifest_url` (string): firmware OTA manifest URL
+- `tool_manifest_url` (string): local SD tool update manifest URL
+- `ota_api_key` (string): Bearer token used for firmware and tool update downloads
+- `ota_ca_cert` (string): optional CA certificate for OTA HTTPS requests. If empty, the updater uses insecure TLS mode
 - `timezone` (string): TZ string used for NTP time configuration
 - `mic_sample_rate` (number): microphone input sample rate
 - `mic_magnification` (number): microphone input gain setting
@@ -204,7 +242,7 @@ Public user callbacks:
   - Called when the server sends final text metadata. `responseText` is the final response text, and `voiceText` is the text used for voice output when available.
 - `avatar.onToolCall(aiavatar::ToolCallCallback cb)`
   - Signature: `void (*)(const char* toolName)`
-  - Called when the server reports a tool call. Built-in LED/OpenClaw effects run first, then the user callback runs.
+  - Called when the server reports a tool call. Built-in LED/OpenClaw effects run first. If the name matches a local SD tool in `tools.json` and is not consumed by OpenClaw, the framework runs it and does not call this callback.
 - `avatar.onAccepted(aiavatar::SimpleCallback cb)`
   - Signature: `void (*)()`
   - Called when the server accepts a user input/request. Built-in playback interruption and accepted LED effects run first.

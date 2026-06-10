@@ -16,6 +16,8 @@
 #include "StackChanHardware.h"
 #include "StatusOverlay.h"
 #include "SystemUIController.h"
+#include "ToolActionController.h"
+#include "ToolUpdater.h"
 #include "VisualEffects.h"
 #include "WebSocketClient.h"
 
@@ -66,6 +68,8 @@ public:
     void resetSleepTimer(const char* reason);
     bool checkForFirmwareUpdate();
     bool startFirmwareUpdate();
+    bool checkForToolUpdate();
+    bool startToolUpdate();
 
     WebSocketClient& websocket() { return ws_; }
     MicrophoneInput& microphone() { return mic_; }
@@ -74,6 +78,8 @@ public:
     FaceController& face() { return face_; }
     LedController& leds() { return leds_; }
     MotionController& motion() { return motion_; }
+    ToolActionController& tools() { return toolActions_; }
+    const ToolActionController& tools() const { return toolActions_; }
     StatusOverlay& statusOverlay() { return statusOverlay_; }
     SystemUIController& systemUI() { return systemUI_; }
     VisualEffects& visualEffects() { return visualEffects_; }
@@ -94,6 +100,7 @@ public:
     uint8_t idleAnimationIntervalSeconds() const { return idleMotionIntervalSeconds(); }
     bool isServerProcessing() const { return serverProcessing_; }
     bool isPushToTalkActive() const { return pushToTalkActive_; }
+    bool isSpeakerReady() const { return speakerReady_; }
     bool isSleeping() const { return sleepManager_.isSleeping(); }
     bool isWifiOffForSleep() const { return sleepManager_.isWifiOff(); }
     bool wasSleepWakeTriggered() const { return sleepManager_.wakeActivityTriggered(); }
@@ -111,6 +118,13 @@ public:
     bool otaUpdateAvailable() const { return otaUpdater_.updateAvailable(); }
     bool otaBusy() const { return otaUpdater_.busy(); }
     const OtaManifest& otaManifest() const { return otaUpdater_.manifest(); }
+    OtaUpdateStatus toolUpdateStatus() const { return toolUpdater_.status(); }
+    const char* toolUpdateStatusMessage() const { return toolUpdater_.statusMessage(); }
+    int toolUpdateProgressPercent() const { return toolUpdater_.progressPercent(); }
+    bool toolUpdateAvailable() const { return toolUpdater_.updateAvailable(); }
+    bool toolUpdateBusy() const { return toolUpdater_.busy(); }
+    const ToolManifest& toolManifest() const { return toolUpdater_.manifest(); }
+    const char* toolLocalVersion() const { return toolUpdater_.localVersion(); }
     bool isStartupComplete() const {
         return !config_.fastStartup ||
                (deferredStartupStage_ >= 7 && face_.deferredLoadingComplete());
@@ -139,6 +153,7 @@ private:
     FaceController face_;
     LedController leds_;
     MotionController motion_;
+    ToolActionController toolActions_;
     StackChanHardware stackChanHardware_;
     CameraController camera_;
     StatusOverlay statusOverlay_;
@@ -146,6 +161,7 @@ private:
     VisualEffects visualEffects_;
     OpenClawEffects openClaw_;
     OtaUpdater otaUpdater_;
+    ToolUpdater toolUpdater_;
     SleepManager sleepManager_;
     ResourceProvider defaultResources_;
 
@@ -165,6 +181,7 @@ private:
     bool websocketReady_;
     bool openClawReady_;
     bool deferredImagesLogged_;
+    bool toolUpdateReloaded_;
     uint8_t deferredStartupStage_;
     uint32_t deferredStartupNextMs_;
     uint32_t heavyDeferredResumeMs_;
