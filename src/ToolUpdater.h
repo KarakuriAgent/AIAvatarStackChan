@@ -70,6 +70,7 @@ private:
     bool fetchManifest(ToolManifest& manifest);
     bool downloadAndApply(const ToolManifest& manifest);
     bool extractPackage(const char* packagePath, const char* destRoot);
+    bool extractPackageBuffer(const uint8_t* package, size_t packageSize, const char* destRoot);
     bool removeRecursive(const char* path);
     bool ensureDirectoryPath(const char* path);
     bool ensureParentDirs(const char* path);
