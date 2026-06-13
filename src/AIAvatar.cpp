@@ -1330,7 +1330,8 @@ void AIAvatar::updateStatusOverlay() {
         display_.setDirty();
     }
 #if defined(AIAVATAR_BOARD_ATOMS3)
-    bool disconnected = !state.wifiConnected || !state.websocketConnected;
+    bool audioMuted = state.micMuted && state.speakerMuted;
+    bool disconnected = !audioMuted && (!state.wifiConnected || !state.websocketConnected);
     if (visualEffects_.setStatusError(disconnected)) {
         display_.setDirty();
     }
