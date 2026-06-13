@@ -5,6 +5,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <cstdarg>
 #include <cstring>
 
 namespace aiavatar {
@@ -79,6 +80,14 @@ SystemUIController::SystemUIController()
       toolCategoryScrollOffset_(0),
       toolScrollOffset_(0),
       settingsHoldActive_(false),
+      buttonNavigationActive_(false),
+      uiAudioMuteActive_(false),
+      uiAudioMuteSavedMic_(false),
+      uiAudioMuteSavedSpeaker_(false),
+      atomSettingMode_(AtomSettingMode::HomeMute),
+      atomSettingLastInputMs_(0),
+      atomFeedbackUntilMs_(0),
+      atomFeedbackText_{0},
       settingsHoldTarget_(HoldTarget::None),
       settingsHoldDelta_(0),
       settingsHoldNextMs_(0),
@@ -127,6 +136,9 @@ void SystemUIController::update() {
         closeMenu();
     }
 
+    updateAtomSettingMode();
+    updateBuiltInButton();
+
     if (!M5.Touch.isEnabled()) return;
     auto detail = M5.Touch.getDetail();
     recordTouch(detail);
@@ -145,6 +157,13 @@ void SystemUIController::update() {
 void SystemUIController::draw(LGFX_Sprite* canvas) const {
     if (!canvas || !config_) return;
 
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (atomSettingMode_ != AtomSettingMode::HomeMute) {
+        drawAtomSettingOverlay(canvas);
+        return;
+    }
+#endif
+
     if (settingsOpen_) {
         drawSettings(canvas);
     }
@@ -153,6 +172,74 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
     }
     if (menuOpen_) {
         drawNetworkMenu(canvas);
+    }
+}
+
+void SystemUIController::drawAtomSettingOverlay(LGFX_Sprite* canvas) const {
+    if (!canvas) return;
+
+    int w = canvas->width();
+    int h = canvas->height();
+    int cx = w / 2;
+    int cy = h / 2;
+    canvas->fillRect(0, 0, w, h, 0x0841);
+
+    const char* label = "";
+    uint16_t color = TFT_WHITE;
+    switch (atomSettingMode_) {
+        case AtomSettingMode::Volume:
+            label = "VOL";
+            color = TFT_GREEN;
+            canvas->fillRect(cx - 38, cy - 12, 14, 24, color);
+            canvas->fillTriangle(cx - 24, cy - 20, cx - 24, cy + 20, cx + 2, cy, color);
+            canvas->drawFastVLine(cx + 16, cy - 20, 40, color);
+            canvas->drawFastVLine(cx + 26, cy - 28, 56, color);
+            canvas->drawFastVLine(cx + 36, cy - 36, 72, color);
+            break;
+        case AtomSettingMode::Brightness:
+            label = "BRI";
+            color = 0xFFE0;
+            canvas->fillCircle(cx, cy, 18, color);
+            for (int i = 0; i < 8; ++i) {
+                int dx = (i == 0 || i == 4) ? 0 : (i < 4 ? 1 : -1);
+                int dy = (i == 2 || i == 6) ? 0 : (i < 2 || i > 6 ? -1 : 1);
+                if (i == 1 || i == 5) { dx = i == 1 ? 1 : -1; dy = -1; }
+                if (i == 3 || i == 7) { dx = i == 3 ? 1 : -1; dy = 1; }
+                int x1 = cx + dx * 28;
+                int y1 = cy + dy * 28;
+                int x2 = cx + dx * 42;
+                int y2 = cy + dy * 42;
+                canvas->drawLine(x1, y1, x2, y2, color);
+            }
+            break;
+        case AtomSettingMode::WiFi:
+            label = "Wi-Fi";
+            color = 0x5DFF;
+            canvas->fillCircle(cx, cy + 30, 5, color);
+            canvas->drawLine(cx - 14, cy + 16, cx, cy + 6, color);
+            canvas->drawLine(cx, cy + 6, cx + 14, cy + 16, color);
+            canvas->drawLine(cx - 28, cy + 2, cx, cy - 16, color);
+            canvas->drawLine(cx, cy - 16, cx + 28, cy + 2, color);
+            canvas->drawLine(cx - 42, cy - 12, cx, cy - 38, color);
+            canvas->drawLine(cx, cy - 38, cx + 42, cy - 12, color);
+            break;
+        case AtomSettingMode::HomeMute:
+        case AtomSettingMode::Count:
+        default:
+            return;
+    }
+
+    canvas->setTextDatum(middle_center);
+    canvas->setTextSize(1);
+    if (atomFeedbackText_[0] && atomFeedbackUntilMs_ && millis() < atomFeedbackUntilMs_) {
+        canvas->setFont(&fonts::lgfxJapanGothic_20);
+        canvas->setTextColor(TFT_WHITE);
+        canvas->fillRoundRect(8, h - 38, w - 16, 28, 4, 0x2104);
+        canvas->drawString(atomFeedbackText_, cx, h - 24);
+    } else {
+        canvas->setFont(&fonts::lgfxJapanGothic_20);
+        canvas->setTextColor(color);
+        canvas->drawString(label, cx, 18);
     }
 }
 
@@ -319,9 +406,11 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
     UiRect row = settingsItemBounds(visibleIndex);
     SettingsItem item = static_cast<SettingsItem>(index);
 
-    canvas->fillRect(row.x, row.y, row.w, row.h, 0x0841);
+    bool selected = buttonNavigationActive_ && settingsView_ == SettingsView::Root &&
+                    index == settingsSelected_;
+    canvas->fillRect(row.x, row.y, row.w, row.h, selected ? 0x001F : 0x0841);
     canvas->drawFastHLine(row.x + kSettingsRowPaddingX, row.y + row.h - 1,
-                          row.w - kSettingsRowPaddingX * 2, 0x3186);
+                          row.w - kSettingsRowPaddingX * 2, selected ? 0x5ACB : 0x3186);
 
     UiRect iconBounds{static_cast<int16_t>(row.x + kSettingsRowPaddingX),
                       static_cast<int16_t>(row.y + (row.h - kSettingsIconSize) / 2),
@@ -387,7 +476,7 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
     canvas->drawString(label, labelX, labelY);
 
     canvas->setFont(&fonts::lgfxJapanGothic_16);
-    canvas->setTextColor(0xC618);
+    canvas->setTextColor(selected ? TFT_WHITE : 0xC618);
     int valueW = canvas->textWidth(value);
     int valueX = row.x + row.w - kSettingsRowPaddingX - valueW - (navigates ? 18 : 0);
     int valueY = row.y + (row.h - canvas->fontHeight()) / 2;
@@ -396,8 +485,9 @@ void SystemUIController::drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) co
     if (navigates) {
         int cy = row.y + row.h / 2;
         int x = row.x + row.w - kSettingsRowPaddingX - 9;
-        canvas->drawLine(x - 4, cy - 7, x + 4, cy, 0xC618);
-        canvas->drawLine(x + 4, cy, x - 4, cy + 7, 0xC618);
+        uint16_t navColor = selected ? TFT_WHITE : 0xC618;
+        canvas->drawLine(x - 4, cy - 7, x + 4, cy, navColor);
+        canvas->drawLine(x + 4, cy, x - 4, cy + 7, navColor);
     }
 }
 
@@ -948,6 +1038,302 @@ void SystemUIController::runButtonAction(ButtonId id) {
     }
 }
 
+void SystemUIController::updateBuiltInButton() {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (M5.BtnA.wasHold()) {
+        handleButtonEvent(UiButtonEvent::Hold);
+        return;
+    }
+    if (M5.BtnA.wasDoubleClicked()) {
+        handleButtonEvent(UiButtonEvent::DoubleClick);
+        return;
+    }
+    if (M5.BtnA.wasSingleClicked()) {
+        handleButtonEvent(UiButtonEvent::SingleClick);
+        return;
+    }
+#endif
+}
+
+void SystemUIController::updateAtomSettingMode() {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    uint32_t now = millis();
+    if (atomFeedbackUntilMs_ && static_cast<int32_t>(now - atomFeedbackUntilMs_) >= 0) {
+        atomFeedbackUntilMs_ = 0;
+        atomFeedbackText_[0] = '\0';
+        avatar_->display().setDirty();
+    }
+    if (atomSettingMode_ != AtomSettingMode::HomeMute &&
+        atomSettingLastInputMs_ && now - atomSettingLastInputMs_ >= kAtomSettingIdleMs) {
+        setAtomSettingMode(AtomSettingMode::HomeMute);
+    }
+#endif
+}
+
+void SystemUIController::beginUiAudioMute() {
+    if (!avatar_ || uiAudioMuteActive_) return;
+    uiAudioMuteSavedMic_ = avatar_->isMicMuted();
+    uiAudioMuteSavedSpeaker_ = avatar_->isSpeakerMuted();
+    uiAudioMuteActive_ = true;
+    avatar_->setTemporaryAudioMute(true, true);
+}
+
+void SystemUIController::restoreUiAudioMuteIfIdle() {
+    if (!avatar_ || !uiAudioMuteActive_ || uiAudioMuteRequired()) return;
+    bool mic = uiAudioMuteSavedMic_;
+    bool speaker = uiAudioMuteSavedSpeaker_;
+    uiAudioMuteActive_ = false;
+    avatar_->setTemporaryAudioMute(mic, speaker);
+}
+
+bool SystemUIController::uiAudioMuteRequired() const {
+    if (settingsOpen_ || toolMenuOpen_ || menuOpen_) return true;
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (atomSettingMode_ != AtomSettingMode::HomeMute) return true;
+#endif
+    return false;
+}
+
+void SystemUIController::handleButtonEvent(UiButtonEvent event) {
+    if (!avatar_) return;
+
+    buttonNavigationActive_ = true;
+    avatar_->resetSleepTimer("button");
+
+    if (event == UiButtonEvent::SingleClick && avatar_->cancelPlayback()) {
+        return;
+    }
+
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    handleAtomButtonEvent(event);
+    return;
+#else
+    if (event == UiButtonEvent::DoubleClick) {
+        handleButtonBack();
+        return;
+    }
+
+    if (settingsOpen_) {
+        if (event == UiButtonEvent::Hold) {
+            if (settingsView_ != SettingsView::Root) {
+                handleSettingsBack();
+            }
+            advanceSettingsSelection();
+            return;
+        }
+        if (event == UiButtonEvent::SingleClick) {
+            activateSelectedSetting();
+            return;
+        }
+    }
+
+    if (toolMenuOpen_) {
+        if (event == UiButtonEvent::DoubleClick) {
+            handleToolBack();
+        }
+        return;
+    }
+
+    if (menuOpen_) {
+        if (event == UiButtonEvent::DoubleClick) {
+            closeMenu();
+        }
+        return;
+    }
+
+    if (!uiVisible_) return;
+
+    if (event == UiButtonEvent::SingleClick) {
+        toggleAudioMutePair();
+        return;
+    }
+    if (event == UiButtonEvent::Hold) {
+        openSettings();
+    }
+#endif
+}
+
+void SystemUIController::handleAtomButtonEvent(UiButtonEvent event) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    atomSettingLastInputMs_ = millis();
+
+    if (event == UiButtonEvent::Hold) {
+        advanceAtomSettingMode();
+        return;
+    }
+    if (event == UiButtonEvent::SingleClick) {
+        applyAtomSettingDelta(1);
+        return;
+    }
+    if (event == UiButtonEvent::DoubleClick) {
+        applyAtomSettingDelta(-1);
+    }
+#else
+    (void)event;
+#endif
+}
+
+void SystemUIController::advanceAtomSettingMode() {
+    uint8_t next = static_cast<uint8_t>(atomSettingMode_) + 1;
+    if (next >= static_cast<uint8_t>(AtomSettingMode::Count)) next = 0;
+    setAtomSettingMode(static_cast<AtomSettingMode>(next));
+}
+
+void SystemUIController::setAtomSettingMode(AtomSettingMode mode) {
+    atomSettingMode_ = mode;
+    atomSettingLastInputMs_ = millis();
+    atomFeedbackUntilMs_ = 0;
+    atomFeedbackText_[0] = '\0';
+
+    if (atomSettingMode_ == AtomSettingMode::HomeMute) {
+        restoreUiAudioMuteIfIdle();
+    } else {
+        beginUiAudioMute();
+    }
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::applyAtomSettingDelta(int8_t delta) {
+    switch (atomSettingMode_) {
+        case AtomSettingMode::HomeMute:
+            if (delta > 0) {
+                toggleAudioMutePair();
+            }
+            break;
+        case AtomSettingMode::Volume:
+            adjustSpeakerVolume(delta > 0 ? kAtomPercentStep : -kAtomPercentStep);
+            showAtomFeedback("VOL %u%%", static_cast<unsigned>(byteToPercent(avatar_->currentVolume())));
+            break;
+        case AtomSettingMode::Brightness:
+            adjustBrightness(delta > 0 ? kAtomPercentStep : -kAtomPercentStep);
+            showAtomFeedback("BRI %u%%", static_cast<unsigned>(byteToPercent(avatar_->displayBrightness())));
+            break;
+        case AtomSettingMode::WiFi:
+            switchAtomWifi(delta);
+            break;
+        case AtomSettingMode::Count:
+        default:
+            break;
+    }
+}
+
+void SystemUIController::showAtomFeedback(const char* format, ...) {
+    if (!format) return;
+    va_list args;
+    va_start(args, format);
+    vsnprintf(atomFeedbackText_, sizeof(atomFeedbackText_), format, args);
+    va_end(args);
+    atomFeedbackUntilMs_ = millis() + kAtomFeedbackMs;
+    avatar_->display().setDirty();
+}
+
+int8_t SystemUIController::currentWifiIndex() const {
+    if (!config_ || config_->wifiNetworkCount == 0) return -1;
+    if (WiFi.status() == WL_CONNECTED) {
+        String ssid = WiFi.SSID();
+        for (uint8_t i = 0; i < config_->wifiNetworkCount; ++i) {
+            if (config_->wifiNetworks[i].ssid[0] && ssid == config_->wifiNetworks[i].ssid) {
+                return static_cast<int8_t>(i);
+            }
+        }
+    }
+    for (uint8_t i = 0; i < config_->wifiNetworkCount; ++i) {
+        if (config_->wifiNetworks[i].ssid[0] &&
+            strcmp(config_->wifiNetworks[i].ssid, config_->wifiSsid) == 0) {
+            return static_cast<int8_t>(i);
+        }
+    }
+    for (uint8_t i = 0; i < config_->wifiNetworkCount; ++i) {
+        if (config_->wifiNetworks[i].ssid[0]) return static_cast<int8_t>(i);
+    }
+    return -1;
+}
+
+void SystemUIController::switchAtomWifi(int8_t delta) {
+    if (!config_ || config_->wifiNetworkCount == 0) {
+        showAtomFeedback("NO WIFI");
+        return;
+    }
+
+    int8_t current = currentWifiIndex();
+    if (current < 0) {
+        showAtomFeedback("NO WIFI");
+        return;
+    }
+
+    int count = config_->wifiNetworkCount;
+    int index = current;
+    for (int step = 0; step < count; ++step) {
+        index += delta > 0 ? 1 : -1;
+        if (index < 0) index = count - 1;
+        if (index >= count) index = 0;
+        if (config_->wifiNetworks[index].ssid[0]) {
+            avatar_->switchWiFi(static_cast<uint8_t>(index));
+            char ssid[18];
+            copyTruncated(ssid, sizeof(ssid), config_->wifiNetworks[index].ssid, 14);
+            showAtomFeedback("WiFi %s", ssid);
+            return;
+        }
+    }
+    showAtomFeedback("NO WIFI");
+}
+
+void SystemUIController::toggleAudioMutePair() {
+    if (!avatar_) return;
+    bool mute = !(avatar_->isMicMuted() && avatar_->isSpeakerMuted());
+    avatar_->setMicMuted(mute);
+    avatar_->setSpeakerMuted(mute);
+}
+
+void SystemUIController::handleButtonBack() {
+    if (settingsOpen_) {
+        handleSettingsBack();
+        return;
+    }
+    if (toolMenuOpen_) {
+        handleToolBack();
+        return;
+    }
+    if (menuOpen_) {
+        closeMenu();
+    }
+}
+
+void SystemUIController::activateSelectedSetting() {
+    if (!settingsOpen_ || settingsView_ != SettingsView::Root) return;
+    ensureSettingsSelectionVisible();
+    runSettingsAction(settingsSelected_);
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::advanceSettingsSelection() {
+    if (!settingsOpen_ || settingsView_ != SettingsView::Root) return;
+    uint8_t total = settingsItemCount();
+    if (total == 0) return;
+    settingsSelected_ = (settingsSelected_ + 1) % total;
+    ensureSettingsSelectionVisible();
+    avatar_->display().setDirty();
+}
+
+void SystemUIController::ensureSettingsSelectionVisible() {
+    uint8_t total = settingsItemCount();
+    if (total == 0) {
+        settingsSelected_ = 0;
+        settingsScrollOffset_ = 0;
+        return;
+    }
+    if (settingsSelected_ >= total) settingsSelected_ = total - 1;
+
+    uint8_t visible = visibleSettingsRows();
+    int maxOffset = total > visible ? total - visible : 0;
+    if (settingsSelected_ < settingsScrollOffset_) {
+        settingsScrollOffset_ = settingsSelected_;
+    } else if (settingsSelected_ >= settingsScrollOffset_ + visible) {
+        settingsScrollOffset_ = settingsSelected_ - visible + 1;
+    }
+    if (settingsScrollOffset_ > maxOffset) settingsScrollOffset_ = maxOffset;
+}
+
 void SystemUIController::handleTap(int16_t x, int16_t y) {
     if (!settingsOpen_ && !toolMenuOpen_ && uiVisible_ &&
         statusOverlay_->speakerBounds().contains(x, y)) {
@@ -1087,6 +1473,7 @@ bool SystemUIController::isPushToTalkTouch(int16_t x, int16_t y) const {
 void SystemUIController::openMenu() {
     if (!uiVisible_) return;
 
+    beginUiAudioMute();
     menuOpen_ = true;
     menuClosePending_ = false;
     selected_ = 0;
@@ -1097,12 +1484,14 @@ void SystemUIController::openMenu() {
 void SystemUIController::closeMenu() {
     menuOpen_ = false;
     menuClosePending_ = false;
+    restoreUiAudioMuteIfIdle();
     avatar_->display().setDirty();
 }
 
 void SystemUIController::openSettings() {
     if (!uiVisible_) return;
 
+    beginUiAudioMute();
     settingsOpen_ = true;
     toolMenuOpen_ = false;
     settingsView_ = SettingsView::Root;
@@ -1110,6 +1499,7 @@ void SystemUIController::openSettings() {
     menuClosePending_ = false;
     settingsSelected_ = 0;
     settingsScrollOffset_ = 0;
+    ensureSettingsSelectionVisible();
     settingsHoldActive_ = false;
     settingsHoldTarget_ = HoldTarget::None;
     avatar_->motion().goHome();
@@ -1125,12 +1515,14 @@ void SystemUIController::closeSettings() {
     menuClosePending_ = false;
     settingsHoldActive_ = false;
     settingsHoldTarget_ = HoldTarget::None;
+    restoreUiAudioMuteIfIdle();
     avatar_->display().setDirty();
 }
 
 void SystemUIController::openToolMenu() {
     if (!uiVisible_) return;
 
+    beginUiAudioMute();
     toolMenuOpen_ = true;
     settingsOpen_ = false;
     settingsView_ = SettingsView::Root;
@@ -1156,6 +1548,7 @@ void SystemUIController::closeToolMenu() {
     toolScrollOffset_ = 0;
     menuOpen_ = false;
     menuClosePending_ = false;
+    restoreUiAudioMuteIfIdle();
     avatar_->display().setDirty();
 }
 
@@ -1171,6 +1564,7 @@ void SystemUIController::handleToolBack() {
 
 void SystemUIController::recordTouch(const m5::touch_detail_t& detail) {
     if (detail.wasPressed()) {
+        buttonNavigationActive_ = false;
         avatar_->resetSleepTimer("touch");
         touchActive_ = true;
         touchHeld_ = false;
@@ -1265,12 +1659,14 @@ void SystemUIController::setUiVisible(bool visible) {
         }
         settingsOpen_ = false;
         settingsView_ = SettingsView::Root;
+        buttonNavigationActive_ = false;
         toolMenuOpen_ = false;
         toolView_ = ToolView::Categories;
         toolCategorySelected_ = 0;
         toolCategoryScrollOffset_ = 0;
         toolScrollOffset_ = 0;
     }
+    restoreUiAudioMuteIfIdle();
     avatar_->display().setDirty();
 }
 

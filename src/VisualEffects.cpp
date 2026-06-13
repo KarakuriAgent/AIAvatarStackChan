@@ -7,8 +7,23 @@
 namespace aiavatar {
 
 namespace {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+constexpr int kEffectInset = 4;
+constexpr int kGlowWidth = 2;
+constexpr int kProcessingSegmentLength = 32;
+constexpr int kVisionSegmentLength = 40;
+constexpr int kProcessingSegmentThickness = 1;
+constexpr int kVisionSegmentThickness = 2;
+constexpr float kCircularGlowWidth = 3.5f;
+#else
 constexpr int kEffectInset = 8;
 constexpr int kGlowWidth = 4;
+constexpr int kProcessingSegmentLength = 64;
+constexpr int kVisionSegmentLength = 80;
+constexpr int kProcessingSegmentThickness = 2;
+constexpr int kVisionSegmentThickness = 3;
+constexpr float kCircularGlowWidth = 7.0f;
+#endif
 constexpr int kMaxAlpha = 228;
 constexpr uint32_t kFrameIntervalMs = 33;
 constexpr float kTwoPi = 6.28318530718f;
@@ -113,9 +128,10 @@ VisualEffects::VisualEffects()
       toolVisible_(false),
       visionVisible_(false),
       errorVisible_(false),
+      statusErrorVisible_(false),
       processingActive_(false),
       glowShape_(ListeningGlowShape::Rectangle),
-      circularGlowWidth_(7.0f),
+      circularGlowWidth_(kCircularGlowWidth),
       seamlessCircularGlowGradient_(false) {}
 
 bool VisualEffects::showVoiceDetected(uint32_t durationMs) {
@@ -150,6 +166,12 @@ void VisualEffects::showVisionFlash(uint32_t durationMs) {
 void VisualEffects::showErrorFlash(uint32_t durationMs) {
     errorUntilMs_ = millis() + durationMs;
     errorVisible_ = true;
+}
+
+bool VisualEffects::setStatusError(bool active) {
+    if (statusErrorVisible_ == active) return false;
+    statusErrorVisible_ = active;
+    return true;
 }
 
 void VisualEffects::clearToolPulse() {
@@ -195,7 +217,9 @@ bool VisualEffects::update() {
         dirty = true;
     }
 
-    if (anyEffectActive()) {
+    bool animated = voiceVisible_ || acceptedVisible_ || toolVisible_ || visionVisible_ ||
+                    errorVisible_ || processingActive_;
+    if (animated) {
         uint32_t now = millis();
         if (lastFrameMs_ == 0 || now - lastFrameMs_ >= kFrameIntervalMs) {
             lastFrameMs_ = now;
@@ -221,6 +245,7 @@ void VisualEffects::draw(LGFX_Sprite* canvas) const {
         }
     }
     if (errorVisible_) drawErrorFlash(canvas);
+    if (statusErrorVisible_) drawStatusError(canvas);
 }
 
 bool VisualEffects::voiceDetected() const {
@@ -245,7 +270,7 @@ bool VisualEffects::errorActive() const {
 
 bool VisualEffects::anyEffectActive() const {
     return voiceVisible_ || acceptedVisible_ || toolVisible_ || visionVisible_ || errorVisible_ ||
-           processingActive_;
+           statusErrorVisible_ || processingActive_;
 }
 
 void VisualEffects::drawListeningBorder(LGFX_Sprite* canvas) const {
@@ -293,7 +318,7 @@ void VisualEffects::drawVisionFlash(LGFX_Sprite* canvas) const {
     bool on = (millis() % 210) < 80;
     if (!on) return;
     drawInsetBorder(canvas, 0, 100, 255, 210);
-    drawMovingPerimeterSegment(canvas, 120, 210, 255, 240, 420, 80, kEffectInset, 3);
+    drawMovingPerimeterSegment(canvas, 120, 210, 255, 240, 420, kVisionSegmentLength, kEffectInset, kVisionSegmentThickness);
 }
 
 void VisualEffects::drawErrorFlash(LGFX_Sprite* canvas) const {
@@ -304,12 +329,16 @@ void VisualEffects::drawErrorFlash(LGFX_Sprite* canvas) const {
     if (on) drawInsetBorder(canvas, 230, 30, 40, alpha);
 }
 
+void VisualEffects::drawStatusError(LGFX_Sprite* canvas) const {
+    drawInsetBorder(canvas, 230, 30, 40, 220);
+}
+
 void VisualEffects::drawProcessingPulse(LGFX_Sprite* canvas) const {
     float phase = static_cast<float>(millis() % 1400) / 1400.0f;
     float brightness = (sinf(phase * kTwoPi - kTwoPi * 0.25f) + 1.0f) * 0.5f;
     int alpha = 44 + static_cast<int>(80 * brightness);
     drawInsetBorder(canvas, 40, 190, 210, alpha);
-    drawMovingPerimeterSegment(canvas, 80, 230, 220, 185, 1800, 64, kEffectInset, 2);
+    drawMovingPerimeterSegment(canvas, 80, 230, 220, 185, 1800, kProcessingSegmentLength, kEffectInset, kProcessingSegmentThickness);
 }
 
 void VisualEffects::drawCircularListeningBorder(LGFX_Sprite* canvas) const {

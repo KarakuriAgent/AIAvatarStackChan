@@ -126,6 +126,12 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     defaultResources_ = resources;
     config_ = config;
     loadPersistedSettings();
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (config_.displayBrightness < 96) {
+        config_.displayBrightness = 160;
+        Serial.println("[Settings] AtomS3 display brightness raised to 160");
+    }
+#endif
     otaTrust_.clear();
     otaTrust_.loadFromBuiltin(defaultResources_);
     idleAudioAccumulator_.reset();
@@ -174,16 +180,39 @@ bool AIAvatar::beginFast() {
     updateStatusOverlay();
     display_.update();
 
+    auto finishFastStartup = [&]() {
+        deferredStartupStage_ = 0;
+        deferredStartupNextMs_ = millis() + 50;
+        logMemoryUsage("after fast begin");
+        return true;
+    };
+
     mic_.configure(config_.micSampleRate, config_.micMagnification, config_.micBufferSamples);
+    bool audioCaptureReady = true;
     if (!mic_.beginQueue(2)) {
         Serial.println("[AIAvatar] mic queue init failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        audioCaptureReady = false;
+#else
         return false;
+#endif
     }
     invokeTextQueue_ = xQueueCreate(2, sizeof(InvokeTextMessage));
     if (!invokeTextQueue_) {
         Serial.println("[AIAvatar] invoke text queue init failed");
         return false;
     }
+
+    if (audioCaptureReady) {
+        audioCaptureReady = mic_.begin();
+    }
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (!audioCaptureReady) {
+        Serial.println("[AIAvatar] AtomS3 audio capture disabled");
+        return finishFastStartup();
+    }
+#endif
+
     pttBufCapacity_ = static_cast<size_t>(config_.micSampleRate) * config_.pttMaxSeconds;
     if (pttBufCapacity_ > 0) {
         pttBuf_ = static_cast<int16_t*>(ps_malloc(pttBufCapacity_ * sizeof(int16_t)));
@@ -191,15 +220,30 @@ bool AIAvatar::beginFast() {
     }
     if (!pttBuf_) {
         Serial.println("[AIAvatar] PTT buffer allocation failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        mic_.end();
+        free(pttBuf_);
+        pttBuf_ = nullptr;
+        pttBufCapacity_ = 0;
+        return finishFastStartup();
+#else
         return false;
+#endif
     }
     Serial.printf("[AIAvatar] PTT buffer=%u samples %uKB\n",
                   pttBufCapacity_, (pttBufCapacity_ * sizeof(int16_t)) / 1024);
-    mic_.begin();
     ws_.setUploadPcmFormat(config_.micSampleRate, 1);
     if (!ws_.reserveInvokeAudioBuffer(pttBufCapacity_)) {
         Serial.println("[AIAvatar] PTT invoke audio buffer allocation failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        mic_.end();
+        free(pttBuf_);
+        pttBuf_ = nullptr;
+        pttBufCapacity_ = 0;
+        return finishFastStartup();
+#else
         return false;
+#endif
     }
 
     AudioFrameProvider micProvider = {
@@ -210,16 +254,21 @@ bool AIAvatar::beginFast() {
     if (!ws_.configureAudioUpload(micProvider, config_.micBufferSamples, config_.micTxSlowBackoffMs,
                                   config_.micTxFailBackoffMs, config_.keepaliveIntervalMs)) {
         Serial.println("[AIAvatar] audio upload init failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        mic_.end();
+        free(pttBuf_);
+        pttBuf_ = nullptr;
+        pttBufCapacity_ = 0;
+        return finishFastStartup();
+#else
         return false;
+#endif
     }
 
     xTaskCreatePinnedToCore(AIAvatar::micTaskFunc, "AIAvatarMic",
                             config_.audioTaskStackSize, this, 1, &micTaskHandle_,
                             config_.audioTaskCore);
-    deferredStartupStage_ = 0;
-    deferredStartupNextMs_ = millis() + 50;
-    logMemoryUsage("after fast begin");
-    return true;
+    return finishFastStartup();
 }
 
 bool AIAvatar::beginNormal() {
@@ -594,6 +643,16 @@ void AIAvatar::setSpeakerMuted(bool muted) {
 
 void AIAvatar::toggleSpeakerMuted() {
     setSpeakerMuted(!speakerMuted_);
+}
+
+void AIAvatar::setTemporaryAudioMute(bool micMuted, bool speakerMuted) {
+    bool changed = micMuted_ != micMuted || speakerMuted_ != speakerMuted;
+    resetSleepTimer("temporary audio mute");
+    micMuted_ = micMuted;
+    speakerMuted_ = speakerMuted;
+    if (speakerReady_) speaker_.setVolume(effectiveSpeakerVolume());
+    if (speakerMuted_) cancelPlayback();
+    if (changed) display_.setDirty();
 }
 
 void AIAvatar::setIdleMotionEnabled(bool enabled) {
@@ -1270,6 +1329,12 @@ void AIAvatar::updateStatusOverlay() {
     if (statusOverlay_.update(state)) {
         display_.setDirty();
     }
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    bool disconnected = !state.wifiConnected || !state.websocketConnected;
+    if (visualEffects_.setStatusError(disconnected)) {
+        display_.setDirty();
+    }
+#endif
 }
 
 void AIAvatar::showVisionPreview(const uint8_t* jpgBuf, size_t jpgLen) {

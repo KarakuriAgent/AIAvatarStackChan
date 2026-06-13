@@ -47,6 +47,7 @@ public:
     void toggleMicMuted();
     void setSpeakerMuted(bool muted);
     void toggleSpeakerMuted();
+    void setTemporaryAudioMute(bool micMuted, bool speakerMuted);
     void setIdleMotionEnabled(bool enabled);
     void toggleIdleMotionEnabled();
     void setIdleMotionIntervalSeconds(uint8_t seconds);
