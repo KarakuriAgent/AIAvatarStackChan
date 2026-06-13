@@ -18,7 +18,11 @@ constexpr uint16_t kMotionHoldMinMs = 20;
 constexpr uint16_t kMotionHoldMaxMs = 5000;
 constexpr uint8_t kAnimationFpsMin = 1;
 constexpr uint8_t kAnimationFpsMax = 15;
-constexpr size_t kAudioQueueHighWaterSamples = kPlaybackChunkSamples * 8;
+constexpr uint32_t kSceneDurationDefaultMs = 30000;
+constexpr uint32_t kSceneDurationMinMs = 1000;
+constexpr uint32_t kSceneDurationMaxMs = 120000;
+constexpr uint8_t kSceneMotionRepeatDefault = 255;
+constexpr size_t kAudioQueueHighWaterSamples = kPlaybackChunkSamples * 32;
 constexpr int16_t kToolMotionPitchUpOffset = -100;
 constexpr int16_t kToolMotionPitchDownOffset = 300;
 
@@ -113,6 +117,12 @@ uint16_t clampMotionHoldMs(int value) {
     return static_cast<uint16_t>(value);
 }
 
+uint32_t clampSceneDurationMs(uint32_t value) {
+    if (value < kSceneDurationMinMs) return kSceneDurationMinMs;
+    if (value > kSceneDurationMaxMs) return kSceneDurationMaxMs;
+    return value;
+}
+
 int16_t clampToolMotionPitch(int16_t pitchHome, int32_t pitch) {
     int32_t minPitch = static_cast<int32_t>(pitchHome) + kToolMotionPitchUpOffset;
     int32_t maxPitch = static_cast<int32_t>(pitchHome) + kToolMotionPitchDownOffset;
@@ -158,7 +168,11 @@ ToolActionController::ToolActionController()
       animationFrameIndex_(0),
       animationNextMs_(0),
       animationFrameData_(nullptr),
-      animationFrameLen_(0) {
+      animationFrameLen_(0),
+      sceneRunning_(false),
+      sceneMotionEnabled_(false),
+      sceneAnimationEnabled_(false),
+      sceneEndMs_(0) {
     path_[0] = '\0';
 }
 
@@ -225,6 +239,7 @@ void ToolActionController::resetRuntime() {
 }
 
 void ToolActionController::stopCurrentAction() {
+    bool animationWasVisible = animationRunning_ || animationFrameData_;
     motionRunning_ = false;
     motionFramesActive_ = nullptr;
     motionFrameCountActive_ = 0;
@@ -238,6 +253,11 @@ void ToolActionController::stopCurrentAction() {
     activeAnimation_ = nullptr;
     animationFrameIndex_ = 0;
     animationNextMs_ = 0;
+    sceneRunning_ = false;
+    sceneMotionEnabled_ = false;
+    sceneAnimationEnabled_ = false;
+    sceneEndMs_ = 0;
+    if (animationWasVisible && avatar_) avatar_->display().setDirty();
 }
 
 bool ToolActionController::loadFromJsonBytes(const uint8_t* data, size_t len) {
@@ -379,12 +399,29 @@ void ToolActionController::parseCategories(JsonVariantConst root) {
                 ActionType actionType = parseActionType(type);
                 ToolAction& action = actions_[actionCount_];
                 action.type = actionType;
-                action.repeat = actionJson["repeat"] | 1;
-                if (action.repeat == 0) action.repeat = 1;
+                action.repeat = actionType == ActionType::Scene
+                                    ? (actionJson["repeat"] | kSceneMotionRepeatDefault)
+                                    : (actionJson["repeat"] | 1);
+                if (action.repeat == 0) {
+                    action.repeat = actionType == ActionType::Scene
+                                        ? kSceneMotionRepeatDefault
+                                        : 1;
+                }
+                uint32_t durationMs = actionJson["duration_ms"] | 0;
+                if (durationMs == 0) durationMs = actionJson["durationMs"] | kSceneDurationDefaultMs;
+                action.durationMs = clampSceneDurationMs(durationMs);
 
                 const char* value = "";
                 if (actionType == ActionType::Audio) {
                     value = actionJson["path"] | "";
+                } else if (actionType == ActionType::Scene) {
+                    value = actionJson["motion"] | (actionJson["name"] | "");
+                    const char* audio = actionJson["audio"] |
+                                        (actionJson["audio_path"] | (actionJson["path"] | ""));
+                    const char* animation = actionJson["animation"] |
+                                            (actionJson["animation_name"] | "");
+                    strlcpy(action.auxValue, audio, sizeof(action.auxValue));
+                    strlcpy(action.extraValue, animation, sizeof(action.extraValue));
                 } else {
                     value = actionJson["name"] | "";
                 }
@@ -416,6 +453,7 @@ ToolActionController::ActionType ToolActionController::parseActionType(const cha
     if (strcasecmp(type, "motion") == 0) return ActionType::Motion;
     if (strcasecmp(type, "audio") == 0) return ActionType::Audio;
     if (strcasecmp(type, "animation") == 0) return ActionType::Animation;
+    if (strcasecmp(type, "scene") == 0) return ActionType::Scene;
     return ActionType::Unknown;
 }
 
@@ -559,6 +597,8 @@ bool ToolActionController::updateCurrentAction() {
             return updateAudioAction();
         case ActionType::Animation:
             return updateAnimationAction();
+        case ActionType::Scene:
+            return updateSceneAction(action);
         case ActionType::Unknown:
         default:
             return true;
@@ -578,6 +618,8 @@ ToolActionController::ActionStartResult ToolActionController::startCurrentAction
             return startAudioAction(action);
         case ActionType::Animation:
             return startAnimationAction(action);
+        case ActionType::Scene:
+            return startSceneAction(action);
         case ActionType::Unknown:
         default:
             Serial.printf("[Tools] unknown action skipped: %s\n", action.value);
@@ -687,6 +729,36 @@ bool ToolActionController::updateAudioAction() {
     }
 
     if (!audioRunning_ || !audioData_) return true;
+    size_t bytesPerFrame = static_cast<size_t>(audioChannels_) * sizeof(int16_t);
+    if (bytesPerFrame == 0) {
+        freeAudio();
+        return true;
+    }
+
+    while (audioOffset_ < audioEnd_ &&
+           speaker.queuedSamples() < kAudioQueueHighWaterSamples) {
+        size_t remainingFrames = (audioEnd_ - audioOffset_) / bytesPerFrame;
+        size_t frames =
+            remainingFrames > kPlaybackChunkSamples ? kPlaybackChunkSamples : remainingFrames;
+        if (frames == 0) break;
+
+        bool ok = false;
+        if (audioChannels_ == 1) {
+            const int16_t* samples = reinterpret_cast<const int16_t*>(audioData_ + audioOffset_);
+            ok = speaker.enqueuePcmFrame(samples, frames);
+        } else {
+            const int16_t* samples = reinterpret_cast<const int16_t*>(audioData_ + audioOffset_);
+            for (size_t i = 0; i < frames; ++i) {
+                int32_t left = samples[i * 2];
+                int32_t right = samples[i * 2 + 1];
+                audioScratch_[i] = static_cast<int16_t>((left + right) / 2);
+            }
+            ok = speaker.enqueuePcmFrame(audioScratch_, frames);
+        }
+        if (!ok) return false;
+        audioOffset_ += frames * bytesPerFrame;
+    }
+
     if (audioOffset_ >= audioEnd_) {
         speaker.enqueueEnd();
         audioRunning_ = false;
@@ -694,34 +766,7 @@ bool ToolActionController::updateAudioAction() {
         free(audioData_);
         audioData_ = nullptr;
         audioLen_ = 0;
-        return false;
     }
-
-    if (speaker.queuedSamples() >= kAudioQueueHighWaterSamples) return false;
-
-    size_t bytesPerFrame = static_cast<size_t>(audioChannels_) * sizeof(int16_t);
-    if (bytesPerFrame == 0) {
-        freeAudio();
-        return true;
-    }
-    size_t remainingFrames = (audioEnd_ - audioOffset_) / bytesPerFrame;
-    size_t frames = remainingFrames > kPlaybackChunkSamples ? kPlaybackChunkSamples : remainingFrames;
-    if (frames == 0) return false;
-
-    bool ok = false;
-    if (audioChannels_ == 1) {
-        const int16_t* samples = reinterpret_cast<const int16_t*>(audioData_ + audioOffset_);
-        ok = speaker.enqueuePcmFrame(samples, frames);
-    } else {
-        const int16_t* samples = reinterpret_cast<const int16_t*>(audioData_ + audioOffset_);
-        for (size_t i = 0; i < frames; ++i) {
-            int32_t left = samples[i * 2];
-            int32_t right = samples[i * 2 + 1];
-            audioScratch_[i] = static_cast<int16_t>((left + right) / 2);
-        }
-        ok = speaker.enqueuePcmFrame(audioScratch_, frames);
-    }
-    if (ok) audioOffset_ += frames * bytesPerFrame;
     return false;
 }
 
@@ -827,6 +872,33 @@ bool ToolActionController::updateAnimationAction() {
     return false;
 }
 
+bool ToolActionController::updateSceneAnimationAction(bool expired) {
+    if (!animationRunning_ || !activeAnimation_) return true;
+    if (expired) return false;
+
+    uint32_t now = millis();
+    if (static_cast<int32_t>(now - animationNextMs_) < 0) return false;
+
+    if (animationFrameIndex_ >= activeAnimation_->count) {
+        animationFrameIndex_ = 0;
+    }
+
+    if (loadAnimationFrame()) {
+        ++animationFrameIndex_;
+        uint32_t frameMs = 1000UL / activeAnimation_->fps;
+        if (frameMs == 0) frameMs = 1;
+        animationNextMs_ = now + frameMs;
+        if (avatar_) avatar_->display().setDirty();
+        return false;
+    }
+
+    freeAnimationFrame();
+    animationRunning_ = false;
+    activeAnimation_ = nullptr;
+    if (avatar_) avatar_->display().setDirty();
+    return true;
+}
+
 bool ToolActionController::loadAnimationFrame() {
     if (!resources_ || !activeAnimation_) return false;
 
@@ -858,6 +930,102 @@ void ToolActionController::freeAnimationFrame() {
         animationFrameData_ = nullptr;
     }
     animationFrameLen_ = 0;
+}
+
+ToolActionController::ActionStartResult ToolActionController::startSceneAction(
+    const ToolAction& action) {
+    if (!avatar_) return ActionStartResult::Completed;
+    if (!action.value[0] && !action.auxValue[0] && !action.extraValue[0]) {
+        return ActionStartResult::Completed;
+    }
+    if (action.auxValue[0] && !avatar_->isSpeakerReady()) {
+        return ActionStartResult::Waiting;
+    }
+
+    sceneRunning_ = true;
+    sceneMotionEnabled_ = false;
+    sceneAnimationEnabled_ = false;
+    sceneEndMs_ = millis() + action.durationMs;
+
+    if (action.value[0]) {
+        ToolAction motionAction = {};
+        motionAction.type = ActionType::Motion;
+        strlcpy(motionAction.value, action.value, sizeof(motionAction.value));
+        motionAction.repeat = action.repeat > 0 ? action.repeat : kSceneMotionRepeatDefault;
+        startMotionAction(motionAction);
+        sceneMotionEnabled_ = motionRunning_;
+    }
+
+    if (action.extraValue[0]) {
+        ToolAction animationAction = {};
+        animationAction.type = ActionType::Animation;
+        strlcpy(animationAction.value, action.extraValue, sizeof(animationAction.value));
+        startAnimationAction(animationAction);
+        sceneAnimationEnabled_ = animationRunning_;
+    }
+
+    bool audioStarted = false;
+    if (action.auxValue[0]) {
+        ToolAction audioAction = {};
+        audioAction.type = ActionType::Audio;
+        strlcpy(audioAction.value, action.auxValue, sizeof(audioAction.value));
+        audioStarted = startAudioAction(audioAction) == ActionStartResult::Started;
+    }
+
+    if (!sceneMotionEnabled_ && !sceneAnimationEnabled_ && !audioStarted) {
+        sceneRunning_ = false;
+        return ActionStartResult::Completed;
+    }
+
+    return ActionStartResult::Started;
+}
+
+bool ToolActionController::updateSceneAction(const ToolAction& action) {
+    if (!sceneRunning_) return true;
+
+    const bool expired = static_cast<int32_t>(millis() - sceneEndMs_) >= 0;
+
+    bool audioDone = true;
+    if (audioRunning_ || audioDraining_ || audioData_) {
+        audioDone = updateAudioAction();
+    }
+
+    if (motionRunning_) {
+        updateMotionAction();
+    } else if (!expired && sceneMotionEnabled_) {
+        ToolAction motionAction = {};
+        motionAction.type = ActionType::Motion;
+        strlcpy(motionAction.value, action.value, sizeof(motionAction.value));
+        motionAction.repeat = action.repeat > 0 ? action.repeat : kSceneMotionRepeatDefault;
+        startMotionAction(motionAction);
+    }
+
+    if (animationRunning_) {
+        bool animationStopped = updateSceneAnimationAction(expired);
+        if (animationStopped && !expired) {
+            sceneAnimationEnabled_ = false;
+        }
+    } else if (!expired && sceneAnimationEnabled_) {
+        ToolAction animationAction = {};
+        animationAction.type = ActionType::Animation;
+        strlcpy(animationAction.value, action.extraValue, sizeof(animationAction.value));
+        startAnimationAction(animationAction);
+    }
+
+    if (!expired) return false;
+
+    motionRunning_ = false;
+    if (!audioDone) return false;
+
+    if (animationRunning_ || animationFrameData_) {
+        freeAnimationFrame();
+        animationRunning_ = false;
+        activeAnimation_ = nullptr;
+        if (avatar_) avatar_->display().setDirty();
+    }
+
+    sceneRunning_ = false;
+    return true;
 }
 
 void ToolActionController::drawAnimation(LGFX_Sprite* canvas) const {

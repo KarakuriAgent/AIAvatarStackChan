@@ -132,8 +132,9 @@ Supported initial action types:
 - `motion`: plays a motion from `motions[]` by `name`. `home` returns the head to neutral. Yaw is clamped to `-200..200`, pitch to `pitch_home - 100 .. pitch_home + 300`, speed to `50..2000`, and hold time to `20..5000` ms.
 - `audio`: plays a PCM16 WAV file from `path`. Mono and stereo are supported; stereo is downmixed to mono.
 - `animation`: plays a JPEG sequence from `animations[]`. Use `dir`, `pattern`, `start`, `count`, and `fps` so frames can live in a folder instead of being listed one by one.
+- `scene`: starts a motion, WAV, and JPEG sequence together. Use `motion`, `audio`, `animation`, and `duration_ms`; the motion and animation loop until the duration ends while audio drains normally. This is useful for short visual loops paired with longer music.
 
-Actions run in the order listed. Unknown action types are skipped, so future firmware can add handlers without breaking existing configs.
+Actions run in the order listed; `scene` is the combined action for simultaneous playback. Unknown action types are skipped, so future firmware can add handlers without breaking existing configs.
 
 To update local tools without rewriting the SD card, package a tool SD-root directory and serve a tool manifest from the OTA server. `build_ota.sh` bakes both the firmware and tool manifest URLs into the firmware from `OTA_PUBLIC_BASE_URL`; `config.json` can still override them with `ota_manifest_url` and `tool_manifest_url`. The tool updater uses the same `ota_api_key` as firmware OTA. Firmware and tool manifests must be signed with the OTA signing key bundled into the firmware as `/ota_trust.json`.
 
