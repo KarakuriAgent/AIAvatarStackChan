@@ -14,6 +14,26 @@ static aiavatar::Config config;
 static aiavatar::ResourceProvider resources;
 static aiavatar::AIAvatar avatar;
 
+static void applyBoardProfile(aiavatar::Config& cfg) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (cfg.pttMaxSeconds > 2) cfg.pttMaxSeconds = 2;
+    if (cfg.playbackQueueDepth > 32) cfg.playbackQueueDepth = 32;
+    Serial.printf("[Main] AtomS3 profile pttMaxSeconds=%u playbackQueueDepth=%u\n",
+                  cfg.pttMaxSeconds, static_cast<unsigned>(cfg.playbackQueueDepth));
+#else
+    (void)cfg;
+#endif
+}
+
+static void configureBodyHardware() {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    Serial.println("[Main] AtomS3 profile: StackChan body hardware not attached");
+#else
+    // Remove this call if you want to run CoreS3 without Stack-chan hardware.
+    avatar.useStackChan(config);
+#endif
+}
+
 void setup() {
     Serial.begin(115200);
     uint32_t serialStart = millis();
@@ -47,6 +67,8 @@ void setup() {
         Serial.println("[Main] config not found; using built-in defaults");
     }
 
+    applyBoardProfile(config);
+
     if (config.wsHost[0] == '\0') {
         Serial.println("[Main] WS host is empty; running hardware/display only");
     }
@@ -55,8 +77,7 @@ void setup() {
     // Tradeoff: blink, mouth sprites, speaker, WebSocket, and other assets become ready gradually after boot.
     // config.fastStartup = true;
 
-    // Remove `avatar.useStackChan(config)` if you want to run CoreS3 without Stack-chan hardware
-    avatar.useStackChan(config);
+    configureBodyHardware();
 
     if (!avatar.begin(config, resources)) {
         Serial.println("[Main] AIAvatar init failed");
