@@ -32,6 +32,7 @@ enum class UiButtonEvent : uint8_t {
     SingleClick = 0,
     DoubleClick,
     Hold,
+    HoldRelease,
 };
 
 class SystemUIController {
@@ -263,6 +264,8 @@ private:
     void drawSettings(LGFX_Sprite* canvas) const;
     void drawToolMenu(LGFX_Sprite* canvas) const;
     void drawAtomSettingOverlay(LGFX_Sprite* canvas) const;
+    void drawAtomHomeFeedback(LGFX_Sprite* canvas) const;
+    bool atomFeedbackVisible() const;
     void drawSettingsHeader(LGFX_Sprite* canvas, const char* title) const;
     void drawSettingsRoot(LGFX_Sprite* canvas) const;
     void drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) const;

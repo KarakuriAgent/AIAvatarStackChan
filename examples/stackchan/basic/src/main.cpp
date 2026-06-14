@@ -21,9 +21,9 @@ static aiavatar::AIAvatar avatar;
 
 static void applyBoardProfile(aiavatar::Config& cfg) {
 #if defined(AIAVATAR_BOARD_ATOMS3)
-    if (cfg.pttMaxSeconds > 2) cfg.pttMaxSeconds = 2;
+    if (cfg.pttMaxSeconds > 8) cfg.pttMaxSeconds = 8;
     if (cfg.playbackQueueDepth > 32) cfg.playbackQueueDepth = 32;
-    cfg.displayRotation = 0;
+    cfg.displayRotation = 1;
     if (cfg.displayBrightness < kAtomS3MinDisplayBrightness) {
         cfg.displayBrightness = kAtomS3DefaultDisplayBrightness;
     }

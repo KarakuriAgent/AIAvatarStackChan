@@ -258,6 +258,7 @@ private:
     void updateWiFi();
     void interruptPlaybackForNewResponse();
     void updateWifiSwitch();
+    void syncRemoteCameraConfig(const char* reason);
     void prepareNetworkUpdate(const char* reason);
     void resumeWebSocketAfterNetworkUpdateIfIdle();
     void beginUpdateQuiesce(const char* reason);

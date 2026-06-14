@@ -162,6 +162,10 @@ void SystemUIController::draw(LGFX_Sprite* canvas) const {
         drawAtomSettingOverlay(canvas);
         return;
     }
+    if (!settingsOpen_ && !toolMenuOpen_ && !menuOpen_ && atomFeedbackVisible()) {
+        drawAtomHomeFeedback(canvas);
+        return;
+    }
 #endif
 
     if (settingsOpen_) {
@@ -241,6 +245,38 @@ void SystemUIController::drawAtomSettingOverlay(LGFX_Sprite* canvas) const {
         canvas->setTextColor(color);
         canvas->drawString(label, cx, 18);
     }
+}
+
+void SystemUIController::drawAtomHomeFeedback(LGFX_Sprite* canvas) const {
+    if (!canvas || !avatar_) return;
+
+    int w = canvas->width();
+    int h = canvas->height();
+    int cx = w / 2;
+    int cy = h / 2;
+    bool muted = avatar_->isSpeakerMuted();
+    uint16_t color = muted ? TFT_RED : TFT_GREEN;
+
+    canvas->fillRect(0, 0, w, h, 0x0000);
+    canvas->fillRect(cx - 34, cy - 16, 18, 32, color);
+    canvas->fillTriangle(cx - 16, cy - 28, cx - 16, cy + 28, cx + 16, cy, color);
+    if (muted) {
+        canvas->drawLine(cx + 28, cy - 24, cx + 58, cy + 24, color);
+        canvas->drawLine(cx + 58, cy - 24, cx + 28, cy + 24, color);
+    } else {
+        canvas->drawArc(cx + 18, cy, 20, 18, -35, 35, color);
+        canvas->drawArc(cx + 22, cy, 34, 32, -35, 35, color);
+    }
+
+    canvas->setTextDatum(middle_center);
+    canvas->setTextSize(1);
+    canvas->setFont(&fonts::lgfxJapanGothic_20);
+    canvas->setTextColor(color);
+    canvas->drawString(muted ? "MUTE" : "ON", cx, h - 24);
+}
+
+bool SystemUIController::atomFeedbackVisible() const {
+    return atomFeedbackText_[0] && atomFeedbackUntilMs_ && millis() < atomFeedbackUntilMs_;
 }
 
 void SystemUIController::drawNetworkMenu(LGFX_Sprite* canvas) const {
@@ -1040,6 +1076,10 @@ void SystemUIController::runButtonAction(ButtonId id) {
 
 void SystemUIController::updateBuiltInButton() {
 #if defined(AIAVATAR_BOARD_ATOMS3)
+    if (M5.BtnA.wasReleasedAfterHold()) {
+        handleButtonEvent(UiButtonEvent::HoldRelease);
+        return;
+    }
     if (M5.BtnA.wasHold()) {
         handleButtonEvent(UiButtonEvent::Hold);
         return;
@@ -1157,16 +1197,31 @@ void SystemUIController::handleAtomButtonEvent(UiButtonEvent event) {
 #if defined(AIAVATAR_BOARD_ATOMS3)
     atomSettingLastInputMs_ = millis();
 
-    if (event == UiButtonEvent::Hold) {
+    if (event == UiButtonEvent::HoldRelease) {
+        if (avatar_->isPushToTalkActive()) {
+            avatar_->endPushToTalk();
+        }
+        return;
+    }
+    if (event == UiButtonEvent::DoubleClick) {
         advanceAtomSettingMode();
+        return;
+    }
+    if (event == UiButtonEvent::Hold) {
+        if (atomSettingMode_ == AtomSettingMode::HomeMute) {
+            if (avatar_->isSpeakerMuted()) {
+                showAtomFeedback("MUTE");
+            } else {
+                avatar_->startPushToTalk();
+            }
+        } else {
+            applyAtomSettingDelta(-1);
+        }
         return;
     }
     if (event == UiButtonEvent::SingleClick) {
         applyAtomSettingDelta(1);
         return;
-    }
-    if (event == UiButtonEvent::DoubleClick) {
-        applyAtomSettingDelta(-1);
     }
 #else
     (void)event;
@@ -1197,7 +1252,8 @@ void SystemUIController::applyAtomSettingDelta(int8_t delta) {
     switch (atomSettingMode_) {
         case AtomSettingMode::HomeMute:
             if (delta > 0) {
-                toggleAudioMutePair();
+                avatar_->toggleSpeakerMuted();
+                showAtomFeedback(avatar_->isSpeakerMuted() ? "MUTE" : "ON");
             }
             break;
         case AtomSettingMode::Volume:

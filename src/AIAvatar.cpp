@@ -173,9 +173,13 @@ bool AIAvatar::beginFast() {
     stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
     motion_.begin(config_.pitchHome);
     motion_.onNade(AIAvatar::onNadeStatic);
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.begin(config_);
+#else
     if (stackChanHardwareEnabled_) {
-        camera_.begin();
+        camera_.begin(config_);
     }
+#endif
     display_.onOverlay(AIAvatar::drawOverlayStatic);
     updateStatusOverlay();
     display_.update();
@@ -294,9 +298,13 @@ bool AIAvatar::beginNormal() {
     stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
     motion_.begin(config_.pitchHome);
     motion_.onNade(AIAvatar::onNadeStatic);
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.begin(config_);
+#else
     if (stackChanHardwareEnabled_) {
-        camera_.begin();
+        camera_.begin(config_);
     }
+#endif
     openClaw_.begin(display_, leds_);
     openClaw_.preload();
     openClawReady_ = true;
@@ -380,6 +388,9 @@ void AIAvatar::update() {
         M5.update();
     }
     updateWiFi();
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.update();
+#endif
     systemUI_.update();
     toolActions_.update();
     updatePersistedSettings();
@@ -618,6 +629,10 @@ void AIAvatar::setDisplayBrightness(uint8_t brightness) {
 }
 
 void AIAvatar::setMicMuted(bool muted) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    muted = true;
+#endif
+    if (micMuted_ == muted) return;
     resetSleepTimer("mic mute");
     micMuted_ = muted;
     display_.setDirty();
@@ -625,10 +640,14 @@ void AIAvatar::setMicMuted(bool muted) {
 }
 
 void AIAvatar::toggleMicMuted() {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    setMicMuted(true);
+#else
     resetSleepTimer("mic mute");
     micMuted_ = !micMuted_;
     display_.setDirty();
     queueSettingsSave(false, false, true, false, false);
+#endif
 }
 
 void AIAvatar::setSpeakerMuted(bool muted) {
@@ -646,6 +665,9 @@ void AIAvatar::toggleSpeakerMuted() {
 }
 
 void AIAvatar::setTemporaryAudioMute(bool micMuted, bool speakerMuted) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    micMuted = true;
+#endif
     bool changed = micMuted_ != micMuted || speakerMuted_ != speakerMuted;
     resetSleepTimer("temporary audio mute");
     micMuted_ = micMuted;
@@ -725,6 +747,11 @@ bool AIAvatar::cancelPlayback() {
 
 bool AIAvatar::startPushToTalk() {
     if (!micMuted_ || !pttBuf_) return false;
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (speakerMuted_) {
+        return false;
+    }
+#endif
     if (config_.fastStartup && pttSendPending_) {
         Serial.println("[AIAvatar] PTT start blocked: send pending");
         return false;
@@ -1290,6 +1317,7 @@ void AIAvatar::updateWifiSwitch() {
         activeWifiNetworkIndex_ = pendingWifiIndex_;
         queueSettingsSave(false, false, false, true, false);
         wsConnectPending_ = true;
+        syncRemoteCameraConfig("WiFi switch");
         wifiConnectedLogged_ = true;
         Serial.printf("[AIAvatar] WiFi connected to %s ip=%s\n",
                       network.ssid, WiFi.localIP().toString().c_str());
@@ -1299,6 +1327,13 @@ void AIAvatar::updateWifiSwitch() {
         Serial.println("[AIAvatar] WiFi switch timeout");
         display_.setDirty();
     }
+}
+
+void AIAvatar::syncRemoteCameraConfig(const char* reason) {
+    (void)reason;
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.configure(config_);
+#endif
 }
 
 void AIAvatar::updateStatusOverlay() {
@@ -1496,6 +1531,10 @@ void AIAvatar::loadPersistedSettings() {
         }
     }
     prefs.end();
+
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    micMuted_ = true;
+#endif
 
     if (restored) {
         Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s speaker=%s wifi=%u idleMotion=%s/%u/%us\n",
