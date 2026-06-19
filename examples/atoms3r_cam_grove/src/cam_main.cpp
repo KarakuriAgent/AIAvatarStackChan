@@ -12,8 +12,15 @@
 
 namespace {
 
-constexpr uint8_t kGroveSda = 2;
-constexpr uint8_t kGroveScl = 1;
+#ifndef ATOMS3R_CAM_CHILD_I2C_SDA
+#define ATOMS3R_CAM_CHILD_I2C_SDA 2
+#endif
+#ifndef ATOMS3R_CAM_CHILD_I2C_SCL
+#define ATOMS3R_CAM_CHILD_I2C_SCL 1
+#endif
+
+constexpr uint8_t kChildI2cSda = ATOMS3R_CAM_CHILD_I2C_SDA;
+constexpr uint8_t kChildI2cScl = ATOMS3R_CAM_CHILD_I2C_SCL;
 constexpr uint8_t kI2cAddress = 0x42;
 constexpr size_t kMaxConfigJson = 4096;
 constexpr size_t kMaxNetworks = 5;
@@ -324,15 +331,16 @@ bool initCamera() {
 void appSetup() {
     Serial.begin(115200);
     delay(300);
-    Serial.println("[Cam] AtomS3R-CAM Grove");
+    Serial.println("[Cam] AtomS3R-CAM I2C child");
 
-    pinMode(kGroveSda, INPUT_PULLUP);
-    pinMode(kGroveScl, INPUT_PULLUP);
+    pinMode(kChildI2cSda, INPUT_PULLUP);
+    pinMode(kChildI2cScl, INPUT_PULLUP);
     Wire.setBufferSize(256);
-    Wire.begin(kI2cAddress, kGroveSda, kGroveScl, 50000);
+    Wire.begin(kI2cAddress, kChildI2cSda, kChildI2cScl, 50000);
     Wire.onReceive(onI2cReceive);
     Wire.onRequest(onI2cRequest);
-    Serial.println("[Cam] I2C slave ready");
+    Serial.printf("[Cam] I2C slave ready sda=%u scl=%u addr=0x%02x\n",
+                  kChildI2cSda, kChildI2cScl, kI2cAddress);
 
     loadSavedConfig();
     if (configReady) connectWifi();

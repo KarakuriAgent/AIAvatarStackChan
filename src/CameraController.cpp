@@ -25,8 +25,20 @@ namespace aiavatar {
 
 #if defined(AIAVATAR_BOARD_ATOMS3)
 namespace {
-constexpr uint8_t kGroveSda = 2;
-constexpr uint8_t kGroveScl = 1;
+#ifndef AIAVATAR_REMOTE_CAMERA_I2C_SDA
+#define AIAVATAR_REMOTE_CAMERA_I2C_SDA 2
+#endif
+#ifndef AIAVATAR_REMOTE_CAMERA_I2C_SCL
+#define AIAVATAR_REMOTE_CAMERA_I2C_SCL 1
+#endif
+#ifndef AIAVATAR_REMOTE_CAMERA_I2C_PORT
+#define AIAVATAR_REMOTE_CAMERA_I2C_PORT -1
+#endif
+
+constexpr uint8_t kRemoteI2cSda = AIAVATAR_REMOTE_CAMERA_I2C_SDA;
+constexpr uint8_t kRemoteI2cScl = AIAVATAR_REMOTE_CAMERA_I2C_SCL;
+constexpr int kRemoteI2cPort = AIAVATAR_REMOTE_CAMERA_I2C_PORT;
+constexpr uint32_t kRemoteI2cFreq = 50000;
 constexpr uint8_t kCamI2cAddress = 0x42;
 constexpr uint16_t kCamHttpPort = 80;
 constexpr uint32_t kConfigRetryMs = 5000;
@@ -41,9 +53,82 @@ enum RemoteFrameType : uint8_t {
     kFrameEnd = 3,
 };
 
+#if AIAVATAR_REMOTE_CAMERA_I2C_PORT >= 0
+m5::I2C_Class remoteCameraI2c;
+m5::I2C_Class* remoteCameraI2cBus = nullptr;
+
+bool i2cBusMatches(const m5::I2C_Class& bus) {
+    return bus.isEnabled() && bus.getPort() == kRemoteI2cPort &&
+           bus.getSDA() == kRemoteI2cSda && bus.getSCL() == kRemoteI2cScl;
+}
+
+const char* remoteCameraI2cBusName() {
+    if (remoteCameraI2cBus == &M5.In_I2C) return "in";
+    if (remoteCameraI2cBus == &M5.Ex_I2C) return "ex";
+    if (remoteCameraI2cBus == &remoteCameraI2c) return "dedicated";
+    return "none";
+}
+
+bool beginCameraI2cBus() {
+    if (remoteCameraI2cBus) return true;
+    if (i2cBusMatches(M5.In_I2C)) {
+        remoteCameraI2cBus = &M5.In_I2C;
+        return true;
+    }
+    if (i2cBusMatches(M5.Ex_I2C)) {
+        remoteCameraI2cBus = &M5.Ex_I2C;
+        return true;
+    }
+    if (!remoteCameraI2c.begin(static_cast<i2c_port_t>(kRemoteI2cPort),
+                               kRemoteI2cSda, kRemoteI2cScl)) {
+        return false;
+    }
+    remoteCameraI2cBus = &remoteCameraI2c;
+    return true;
+}
+
+bool cameraI2cWrite(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return false;
+    m5::I2C_Class* bus = remoteCameraI2cBus;
+    if (!bus || !bus->start(kCamI2cAddress, false, kRemoteI2cFreq)) {
+        return false;
+    }
+    bool ok = bus->write(data, len);
+    bool stopped = bus->stop();
+    return ok && stopped;
+}
+
+size_t cameraI2cRead(uint8_t* data, size_t len) {
+    if (!data || len == 0) return 0;
+    m5::I2C_Class* bus = remoteCameraI2cBus;
+    if (!bus || !bus->start(kCamI2cAddress, true, kRemoteI2cFreq)) {
+        return 0;
+    }
+    bool ok = bus->read(data, len, true);
+    bool stopped = bus->stop();
+    return ok && stopped ? len : 0;
+}
+#else
 TwoWire& cameraWire() {
     return Wire;
 }
+
+bool cameraI2cWrite(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return false;
+    cameraWire().beginTransmission(kCamI2cAddress);
+    cameraWire().write(data, len);
+    return cameraWire().endTransmission() == 0;
+}
+
+size_t cameraI2cRead(uint8_t* data, size_t len) {
+    if (!data || len == 0) return 0;
+    size_t n = cameraWire().requestFrom(kCamI2cAddress, static_cast<uint8_t>(len));
+    for (size_t i = 0; i < n && i < len; ++i) {
+        data[i] = static_cast<uint8_t>(cameraWire().read());
+    }
+    return n;
+}
+#endif
 
 void sha256UpdateText(mbedtls_sha256_context& ctx, const char* text) {
     if (!text) text = "";
@@ -221,14 +306,22 @@ bool CameraController::captureJpeg(uint8_t** outBuf, size_t* outLen, uint8_t qua
 #if defined(AIAVATAR_BOARD_ATOMS3)
 bool CameraController::beginRemoteI2c() {
     if (remoteI2cStarted_) return true;
-    pinMode(kGroveSda, INPUT_PULLUP);
-    pinMode(kGroveScl, INPUT_PULLUP);
+    pinMode(kRemoteI2cSda, INPUT_PULLUP);
+    pinMode(kRemoteI2cScl, INPUT_PULLUP);
+#if AIAVATAR_REMOTE_CAMERA_I2C_PORT >= 0
+    bool ok = beginCameraI2cBus();
+    remoteI2cStarted_ = ok;
+    Serial.printf("[Camera] AtomS3 remote I2C %s bus=%s port=%d sda=%u scl=%u addr=0x%02x\n",
+                  ok ? "ready" : "failed", remoteCameraI2cBusName(),
+                  kRemoteI2cPort, kRemoteI2cSda, kRemoteI2cScl, kCamI2cAddress);
+#else
     cameraWire().setTimeOut(80);
-    bool ok = cameraWire().begin(kGroveSda, kGroveScl, 50000);
+    bool ok = cameraWire().begin(kRemoteI2cSda, kRemoteI2cScl, kRemoteI2cFreq);
     remoteI2cStarted_ = ok;
     Serial.printf("[Camera] AtomS3 remote I2C %s sda=%u scl=%u addr=0x%02x\n",
-                  ok ? "ready" : "failed", kGroveSda, kGroveScl, kCamI2cAddress);
-    return ok;
+                  ok ? "ready" : "failed", kRemoteI2cSda, kRemoteI2cScl, kCamI2cAddress);
+#endif
+    return remoteI2cStarted_;
 }
 
 bool CameraController::buildRemoteConfig(const Config& config) {
@@ -286,14 +379,14 @@ bool CameraController::sendRemoteConfig(bool force) {
     size_t len = remoteConfigJson_.length();
 
     auto writeFrame = [](uint8_t type, uint16_t value, const uint8_t* data, size_t dataLen) -> bool {
-        cameraWire().beginTransmission(kCamI2cAddress);
-        cameraWire().write(type);
-        cameraWire().write(static_cast<uint8_t>(value & 0xff));
-        cameraWire().write(static_cast<uint8_t>((value >> 8) & 0xff));
-        if (data && dataLen > 0) cameraWire().write(data, dataLen);
-        uint8_t err = cameraWire().endTransmission();
-        if (err != 0) {
-            Serial.printf("[Camera] remote I2C write type=%u err=%u\n", type, err);
+        uint8_t frame[3 + kI2cChunkBytes] = {
+            type,
+            static_cast<uint8_t>(value & 0xff),
+            static_cast<uint8_t>((value >> 8) & 0xff),
+        };
+        if (data && dataLen > 0) memcpy(frame + 3, data, dataLen);
+        if (!cameraI2cWrite(frame, 3 + dataLen)) {
+            Serial.printf("[Camera] remote I2C write type=%u failed\n", type);
             return false;
         }
         delay(8);
@@ -323,9 +416,10 @@ bool CameraController::pollRemoteStatus() {
     remoteLastStatusMs_ = now;
 
     char buf[96] = {};
-    size_t n = cameraWire().requestFrom(kCamI2cAddress, static_cast<uint8_t>(sizeof(buf) - 1));
+    uint8_t raw[sizeof(buf) - 1] = {};
+    size_t n = cameraI2cRead(raw, sizeof(raw));
     for (size_t i = 0; i < n && i < sizeof(buf) - 1; ++i) {
-        buf[i] = static_cast<char>(cameraWire().read());
+        buf[i] = static_cast<char>(raw[i]);
     }
     if (n == 0) {
         remoteState_ = -1;
