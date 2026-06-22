@@ -20,6 +20,7 @@ public:
     void showToolPulse(uint32_t durationMs = 30000);
     void showVisionFlash(uint32_t durationMs = 420);
     void showErrorFlash(uint32_t durationMs = 900);
+    bool setStatusError(bool active);
     void clearToolPulse();
     void setProcessing(bool processing);
     bool update();
@@ -44,6 +45,7 @@ private:
     bool toolVisible_;
     bool visionVisible_;
     bool errorVisible_;
+    bool statusErrorVisible_;
     bool processingActive_;
     ListeningGlowShape glowShape_;
     float circularGlowWidth_;
@@ -60,6 +62,7 @@ private:
     void drawToolPulse(LGFX_Sprite* canvas) const;
     void drawVisionFlash(LGFX_Sprite* canvas) const;
     void drawErrorFlash(LGFX_Sprite* canvas) const;
+    void drawStatusError(LGFX_Sprite* canvas) const;
     void drawProcessingPulse(LGFX_Sprite* canvas) const;
 };
 

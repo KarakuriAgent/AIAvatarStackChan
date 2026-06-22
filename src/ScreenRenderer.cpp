@@ -9,6 +9,16 @@
 
 namespace aiavatar {
 
+static bool spriteHasNonBackgroundPixel(LGFX_Sprite* sprite, int w, int h, uint16_t bgColor) {
+    if (!sprite || w <= 0 || h <= 0) return false;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            if (sprite->readPixel(x, y) != bgColor) return true;
+        }
+    }
+    return false;
+}
+
 ScreenRenderer::ScreenRenderer()
     : canvas_(nullptr),
       currentBase_(nullptr),
@@ -33,7 +43,11 @@ bool ScreenRenderer::begin(uint8_t rotation, uint8_t brightness) {
     canvas_ = new LGFX_Sprite(&M5.Display);
     if (!canvas_) return false;
     canvas_->setColorDepth(16);
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    canvas_->setPsram(false);
+#else
     canvas_->setPsram(true);
+#endif
     if (!canvas_->createSprite(width_, height_)) {
         Serial.println("[Display] canvas allocation failed");
         delete canvas_;
@@ -42,7 +56,11 @@ bool ScreenRenderer::begin(uint8_t rotation, uint8_t brightness) {
     }
 
     dirty_ = true;
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    Serial.printf("[Display] initialized %dx%d canvas=internal\n", width_, height_);
+#else
     Serial.printf("[Display] initialized %dx%d\n", width_, height_);
+#endif
     return true;
 }
 
@@ -105,6 +123,7 @@ LGFX_Sprite* ScreenRenderer::loadSprite(const char* path, int w, int h, uint16_t
         imgH = (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23];
     }
     sprite->fillSprite(bgColor);
+    bool drawn = false;
     if (imageFitMode_ == ImageFitMode::Cover) {
         float scale = 1.0f;
         int offsetX = 0;
@@ -117,15 +136,36 @@ LGFX_Sprite* ScreenRenderer::loadSprite(const char* path, int w, int h, uint16_t
             offsetX = (scaledW - w) / 2;
             offsetY = (scaledH - h) / 2;
         }
-        sprite->drawPng(png, len, 0, 0, w, h, offsetX, offsetY, scale, scale);
+        drawn = sprite->drawPng(png, len, 0, 0, w, h, offsetX, offsetY, scale, scale);
     } else {
-        int offsetX = (w - imgW) / 2;
-        int offsetY = (h - imgH) / 2;
+        float scale = 1.0f;
+        int scaledW = imgW;
+        int scaledH = imgH;
+        if (imgW > 0 && imgH > 0 && w > 0 && h > 0 &&
+            (imgW > w || imgH > h)) {
+            scale = std::min(static_cast<float>(w) / imgW,
+                             static_cast<float>(h) / imgH);
+            scaledW = std::max(1, static_cast<int>(ceilf(imgW * scale)));
+            scaledH = std::max(1, static_cast<int>(ceilf(imgH * scale)));
+        }
+        int offsetX = (w - scaledW) / 2;
+        int offsetY = (h - scaledH) / 2;
         if (offsetX < 0) offsetX = 0;
         if (offsetY < 0) offsetY = 0;
-        sprite->drawPng(png, len, offsetX, offsetY);
+        drawn = sprite->drawPng(png, len, offsetX, offsetY, scaledW, scaledH, 0, 0, scale, scale);
     }
     free(png);
+
+    if (!drawn) {
+        Serial.printf("[Display] draw failed: %s\n", path);
+        delete sprite;
+        return nullptr;
+    }
+    if (!spriteHasNonBackgroundPixel(sprite, w, h, bgColor)) {
+        Serial.printf("[Display] decoded image blank: %s\n", path);
+        delete sprite;
+        return nullptr;
+    }
 
     Serial.printf("[Display] loaded %s\n", path);
     return sprite;

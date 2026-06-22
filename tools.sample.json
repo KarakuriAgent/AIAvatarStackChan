@@ -15,6 +15,45 @@
         { "yaw": 160, "pitch": 200, "speed": 300, "hold_ms": 180 },
         { "yaw": 0, "pitch": 200, "speed": 300, "hold_ms": 160 }
       ]
+    },
+    {
+      "name": "dopa_bounce",
+      "frames": [
+        { "yaw": 0, "pitch": 120, "speed": 720, "hold_ms": 120 },
+        { "yaw": -90, "pitch": 360, "speed": 780, "hold_ms": 120 },
+        { "yaw": 90, "pitch": 150, "speed": 820, "hold_ms": 110 },
+        { "yaw": 0, "pitch": 430, "speed": 760, "hold_ms": 140 },
+        { "yaw": -150, "pitch": 210, "speed": 700, "hold_ms": 120 },
+        { "yaw": 150, "pitch": 260, "speed": 700, "hold_ms": 120 },
+        { "yaw": 0, "pitch": 180, "speed": 760, "hold_ms": 110 },
+        { "yaw": 0, "pitch": 330, "speed": 680, "hold_ms": 130 }
+      ]
+    },
+    {
+      "name": "dopa_pop",
+      "frames": [
+        { "yaw": -180, "pitch": 170, "speed": 900, "hold_ms": 100 },
+        { "yaw": -70, "pitch": 410, "speed": 850, "hold_ms": 110 },
+        { "yaw": 30, "pitch": 130, "speed": 920, "hold_ms": 100 },
+        { "yaw": 170, "pitch": 390, "speed": 850, "hold_ms": 120 },
+        { "yaw": 60, "pitch": 190, "speed": 900, "hold_ms": 100 },
+        { "yaw": -120, "pitch": 320, "speed": 780, "hold_ms": 120 },
+        { "yaw": 0, "pitch": 140, "speed": 820, "hold_ms": 110 },
+        { "yaw": 0, "pitch": 260, "speed": 700, "hold_ms": 130 }
+      ]
+    },
+    {
+      "name": "dopa_orbit",
+      "frames": [
+        { "yaw": -170, "pitch": 210, "speed": 600, "hold_ms": 160 },
+        { "yaw": -110, "pitch": 120, "speed": 650, "hold_ms": 140 },
+        { "yaw": -35, "pitch": 160, "speed": 680, "hold_ms": 130 },
+        { "yaw": 45, "pitch": 350, "speed": 680, "hold_ms": 130 },
+        { "yaw": 120, "pitch": 420, "speed": 650, "hold_ms": 140 },
+        { "yaw": 180, "pitch": 250, "speed": 600, "hold_ms": 160 },
+        { "yaw": 70, "pitch": 150, "speed": 650, "hold_ms": 140 },
+        { "yaw": -70, "pitch": 360, "speed": 650, "hold_ms": 140 }
+      ]
     }
   ],
   "animations": [
@@ -27,9 +66,86 @@
       "count": 24,
       "fps": 8,
       "fit": "contain"
+    },
+    {
+      "name": "dopa_surge",
+      "type": "jpeg_sequence",
+      "dir": "/animations/dopa_surge",
+      "pattern": "%03u.jpg",
+      "start": 0,
+      "count": 24,
+      "fps": 8,
+      "fit": "cover"
+    },
+    {
+      "name": "dopa_pop",
+      "type": "jpeg_sequence",
+      "dir": "/animations/dopa_pop",
+      "pattern": "%03u.jpg",
+      "start": 0,
+      "count": 24,
+      "fps": 8,
+      "fit": "cover"
+    },
+    {
+      "name": "dopa_orbit",
+      "type": "jpeg_sequence",
+      "dir": "/animations/dopa_orbit",
+      "pattern": "%03u.jpg",
+      "start": 0,
+      "count": 24,
+      "fps": 8,
+      "fit": "cover"
     }
   ],
   "categories": [
+    {
+      "name": "dopa",
+      "tools": [
+        {
+          "name": "dopa_surge",
+          "label": "Dopa Surge",
+          "actions": [
+            {
+              "type": "scene",
+              "motion": "dopa_bounce",
+              "audio": "/audio/dopa_surge.wav",
+              "animation": "dopa_surge",
+              "duration_ms": 30000
+            },
+            { "type": "motion", "name": "home" }
+          ]
+        },
+        {
+          "name": "dopa_pop",
+          "label": "Dopa Pop",
+          "actions": [
+            {
+              "type": "scene",
+              "motion": "dopa_pop",
+              "audio": "/audio/dopa_pop.wav",
+              "animation": "dopa_pop",
+              "duration_ms": 30000
+            },
+            { "type": "motion", "name": "home" }
+          ]
+        },
+        {
+          "name": "dopa_orbit",
+          "label": "Dopa Orbit",
+          "actions": [
+            {
+              "type": "scene",
+              "motion": "dopa_orbit",
+              "audio": "/audio/dopa_orbit.wav",
+              "animation": "dopa_orbit",
+              "duration_ms": 30000
+            },
+            { "type": "motion", "name": "home" }
+          ]
+        }
+      ]
+    },
     {
       "name": "Greeting",
       "tools": [

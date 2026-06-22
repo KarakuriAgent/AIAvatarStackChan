@@ -126,6 +126,12 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     defaultResources_ = resources;
     config_ = config;
     loadPersistedSettings();
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (config_.displayBrightness < 96) {
+        config_.displayBrightness = 160;
+        Serial.println("[Settings] AtomS3 display brightness raised to 160");
+    }
+#endif
     otaTrust_.clear();
     otaTrust_.loadFromBuiltin(defaultResources_);
     idleAudioAccumulator_.reset();
@@ -167,23 +173,50 @@ bool AIAvatar::beginFast() {
     stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
     motion_.begin(config_.pitchHome);
     motion_.onNade(AIAvatar::onNadeStatic);
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.begin(config_);
+#else
     if (stackChanHardwareEnabled_) {
-        camera_.begin();
+        camera_.begin(config_);
     }
+#endif
     display_.onOverlay(AIAvatar::drawOverlayStatic);
     updateStatusOverlay();
     display_.update();
 
+    auto finishFastStartup = [&]() {
+        deferredStartupStage_ = 0;
+        deferredStartupNextMs_ = millis() + 50;
+        logMemoryUsage("after fast begin");
+        return true;
+    };
+
     mic_.configure(config_.micSampleRate, config_.micMagnification, config_.micBufferSamples);
+    bool audioCaptureReady = true;
     if (!mic_.beginQueue(2)) {
         Serial.println("[AIAvatar] mic queue init failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        audioCaptureReady = false;
+#else
         return false;
+#endif
     }
     invokeTextQueue_ = xQueueCreate(2, sizeof(InvokeTextMessage));
     if (!invokeTextQueue_) {
         Serial.println("[AIAvatar] invoke text queue init failed");
         return false;
     }
+
+    if (audioCaptureReady) {
+        audioCaptureReady = mic_.begin();
+    }
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (!audioCaptureReady) {
+        Serial.println("[AIAvatar] AtomS3 audio capture disabled");
+        return finishFastStartup();
+    }
+#endif
+
     pttBufCapacity_ = static_cast<size_t>(config_.micSampleRate) * config_.pttMaxSeconds;
     if (pttBufCapacity_ > 0) {
         pttBuf_ = static_cast<int16_t*>(ps_malloc(pttBufCapacity_ * sizeof(int16_t)));
@@ -191,15 +224,30 @@ bool AIAvatar::beginFast() {
     }
     if (!pttBuf_) {
         Serial.println("[AIAvatar] PTT buffer allocation failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        mic_.end();
+        free(pttBuf_);
+        pttBuf_ = nullptr;
+        pttBufCapacity_ = 0;
+        return finishFastStartup();
+#else
         return false;
+#endif
     }
     Serial.printf("[AIAvatar] PTT buffer=%u samples %uKB\n",
                   pttBufCapacity_, (pttBufCapacity_ * sizeof(int16_t)) / 1024);
-    mic_.begin();
     ws_.setUploadPcmFormat(config_.micSampleRate, 1);
     if (!ws_.reserveInvokeAudioBuffer(pttBufCapacity_)) {
         Serial.println("[AIAvatar] PTT invoke audio buffer allocation failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        mic_.end();
+        free(pttBuf_);
+        pttBuf_ = nullptr;
+        pttBufCapacity_ = 0;
+        return finishFastStartup();
+#else
         return false;
+#endif
     }
 
     AudioFrameProvider micProvider = {
@@ -210,16 +258,21 @@ bool AIAvatar::beginFast() {
     if (!ws_.configureAudioUpload(micProvider, config_.micBufferSamples, config_.micTxSlowBackoffMs,
                                   config_.micTxFailBackoffMs, config_.keepaliveIntervalMs)) {
         Serial.println("[AIAvatar] audio upload init failed");
+#if defined(AIAVATAR_BOARD_ATOMS3)
+        mic_.end();
+        free(pttBuf_);
+        pttBuf_ = nullptr;
+        pttBufCapacity_ = 0;
+        return finishFastStartup();
+#else
         return false;
+#endif
     }
 
     xTaskCreatePinnedToCore(AIAvatar::micTaskFunc, "AIAvatarMic",
                             config_.audioTaskStackSize, this, 1, &micTaskHandle_,
                             config_.audioTaskCore);
-    deferredStartupStage_ = 0;
-    deferredStartupNextMs_ = millis() + 50;
-    logMemoryUsage("after fast begin");
-    return true;
+    return finishFastStartup();
 }
 
 bool AIAvatar::beginNormal() {
@@ -245,9 +298,13 @@ bool AIAvatar::beginNormal() {
     stackChanHardware_.setAutoAngleSyncEnabled(config_.stackChanAutoAngleSync);
     motion_.begin(config_.pitchHome);
     motion_.onNade(AIAvatar::onNadeStatic);
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.begin(config_);
+#else
     if (stackChanHardwareEnabled_) {
-        camera_.begin();
+        camera_.begin(config_);
     }
+#endif
     openClaw_.begin(display_, leds_);
     openClaw_.preload();
     openClawReady_ = true;
@@ -331,6 +388,9 @@ void AIAvatar::update() {
         M5.update();
     }
     updateWiFi();
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.update();
+#endif
     systemUI_.update();
     toolActions_.update();
     updatePersistedSettings();
@@ -569,6 +629,10 @@ void AIAvatar::setDisplayBrightness(uint8_t brightness) {
 }
 
 void AIAvatar::setMicMuted(bool muted) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    muted = true;
+#endif
+    if (micMuted_ == muted) return;
     resetSleepTimer("mic mute");
     micMuted_ = muted;
     display_.setDirty();
@@ -576,10 +640,14 @@ void AIAvatar::setMicMuted(bool muted) {
 }
 
 void AIAvatar::toggleMicMuted() {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    setMicMuted(true);
+#else
     resetSleepTimer("mic mute");
     micMuted_ = !micMuted_;
     display_.setDirty();
     queueSettingsSave(false, false, true, false, false);
+#endif
 }
 
 void AIAvatar::setSpeakerMuted(bool muted) {
@@ -594,6 +662,19 @@ void AIAvatar::setSpeakerMuted(bool muted) {
 
 void AIAvatar::toggleSpeakerMuted() {
     setSpeakerMuted(!speakerMuted_);
+}
+
+void AIAvatar::setTemporaryAudioMute(bool micMuted, bool speakerMuted) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    micMuted = true;
+#endif
+    bool changed = micMuted_ != micMuted || speakerMuted_ != speakerMuted;
+    resetSleepTimer("temporary audio mute");
+    micMuted_ = micMuted;
+    speakerMuted_ = speakerMuted;
+    if (speakerReady_) speaker_.setVolume(effectiveSpeakerVolume());
+    if (speakerMuted_) cancelPlayback();
+    if (changed) display_.setDirty();
 }
 
 void AIAvatar::setIdleMotionEnabled(bool enabled) {
@@ -666,6 +747,11 @@ bool AIAvatar::cancelPlayback() {
 
 bool AIAvatar::startPushToTalk() {
     if (!micMuted_ || !pttBuf_) return false;
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (speakerMuted_) {
+        return false;
+    }
+#endif
     if (config_.fastStartup && pttSendPending_) {
         Serial.println("[AIAvatar] PTT start blocked: send pending");
         return false;
@@ -1231,6 +1317,7 @@ void AIAvatar::updateWifiSwitch() {
         activeWifiNetworkIndex_ = pendingWifiIndex_;
         queueSettingsSave(false, false, false, true, false);
         wsConnectPending_ = true;
+        syncRemoteCameraConfig("WiFi switch");
         wifiConnectedLogged_ = true;
         Serial.printf("[AIAvatar] WiFi connected to %s ip=%s\n",
                       network.ssid, WiFi.localIP().toString().c_str());
@@ -1240,6 +1327,13 @@ void AIAvatar::updateWifiSwitch() {
         Serial.println("[AIAvatar] WiFi switch timeout");
         display_.setDirty();
     }
+}
+
+void AIAvatar::syncRemoteCameraConfig(const char* reason) {
+    (void)reason;
+#if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ENABLE_REMOTE_CAMERA)
+    camera_.configure(config_);
+#endif
 }
 
 void AIAvatar::updateStatusOverlay() {
@@ -1270,6 +1364,13 @@ void AIAvatar::updateStatusOverlay() {
     if (statusOverlay_.update(state)) {
         display_.setDirty();
     }
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    bool audioMuted = state.micMuted && state.speakerMuted;
+    bool disconnected = !audioMuted && (!state.wifiConnected || !state.websocketConnected);
+    if (visualEffects_.setStatusError(disconnected)) {
+        display_.setDirty();
+    }
+#endif
 }
 
 void AIAvatar::showVisionPreview(const uint8_t* jpgBuf, size_t jpgLen) {
@@ -1430,6 +1531,10 @@ void AIAvatar::loadPersistedSettings() {
         }
     }
     prefs.end();
+
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    micMuted_ = true;
+#endif
 
     if (restored) {
         Serial.printf("[Settings] NVS restored brightness=%u volume=%u mic=%s speaker=%s wifi=%u idleMotion=%s/%u/%us\n",

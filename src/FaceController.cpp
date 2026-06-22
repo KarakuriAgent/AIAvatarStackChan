@@ -1,10 +1,35 @@
 #include "FaceController.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <cstring>
 #include <strings.h>
 
 namespace aiavatar {
+
+static void drawFallbackNeutralFace(LGFX_Sprite* sprite, int w, int h) {
+    if (!sprite || w <= 0 || h <= 0) return;
+    uint16_t bg = M5.Display.color565(52, 68, 84);
+    uint16_t face = M5.Display.color565(244, 224, 190);
+    uint16_t eye = M5.Display.color565(32, 48, 64);
+    uint16_t cheek = M5.Display.color565(236, 132, 132);
+    uint16_t border = M5.Display.color565(154, 184, 205);
+    int m = std::min(w, h);
+    int cx = w / 2;
+    int cy = h / 2;
+    int r = std::max(12, m * 3 / 8);
+    int eyeR = std::max(2, m / 18);
+
+    sprite->fillSprite(bg);
+    sprite->drawRect(0, 0, w, h, border);
+    sprite->fillCircle(cx, cy, r, face);
+    sprite->drawCircle(cx, cy, r, eye);
+    sprite->fillCircle(cx - r / 3, cy - r / 5, eyeR, eye);
+    sprite->fillCircle(cx + r / 3, cy - r / 5, eyeR, eye);
+    sprite->fillCircle(cx - r / 2, cy + r / 8, eyeR, cheek);
+    sprite->fillCircle(cx + r / 2, cy + r / 8, eyeR, cheek);
+    sprite->drawLine(cx - r / 4, cy + r / 3, cx + r / 4, cy + r / 3, eye);
+}
 
 static constexpr uint32_t kBlinkMinMs = 3000;
 static constexpr uint32_t kBlinkMaxMs = 8000;
@@ -75,13 +100,13 @@ void FaceController::loadInitialSprites() {
     faceSprites_[static_cast<uint8_t>(Expression::Neutral)] =
         display_->loadSprite(kFacePaths[static_cast<uint8_t>(Expression::Neutral)], w, h);
     if (!faceSprites_[static_cast<uint8_t>(Expression::Neutral)]) {
-        Serial.println("[Face] neutral image missing; using black fallback");
+        Serial.println("[Face] neutral image missing; using visible fallback");
         auto* sprite = new LGFX_Sprite(&M5.Display);
         if (sprite) {
             sprite->setColorDepth(16);
             sprite->setPsram(true);
             if (sprite->createSprite(w, h)) {
-                sprite->fillSprite(TFT_BLACK);
+                drawFallbackNeutralFace(sprite, w, h);
                 faceSprites_[static_cast<uint8_t>(Expression::Neutral)] = sprite;
             } else {
                 delete sprite;

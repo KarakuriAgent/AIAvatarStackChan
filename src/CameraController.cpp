@@ -1,6 +1,17 @@
 #include "CameraController.h"
 
+#include "Config.h"
+
 #include <M5Unified.h>
+#include <cstring>
+
+#if defined(AIAVATAR_BOARD_ATOMS3)
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <mbedtls/sha256.h>
+#endif
 
 #if __has_include(<esp_camera.h>) && __has_include(<img_converters.h>)
 #include <esp_camera.h>
@@ -12,6 +23,163 @@
 
 namespace aiavatar {
 
+#if defined(AIAVATAR_BOARD_ATOMS3)
+namespace {
+#ifndef AIAVATAR_REMOTE_CAMERA_I2C_SDA
+#define AIAVATAR_REMOTE_CAMERA_I2C_SDA 2
+#endif
+#ifndef AIAVATAR_REMOTE_CAMERA_I2C_SCL
+#define AIAVATAR_REMOTE_CAMERA_I2C_SCL 1
+#endif
+#ifndef AIAVATAR_REMOTE_CAMERA_I2C_PORT
+#define AIAVATAR_REMOTE_CAMERA_I2C_PORT -1
+#endif
+
+constexpr uint8_t kRemoteI2cSda = AIAVATAR_REMOTE_CAMERA_I2C_SDA;
+constexpr uint8_t kRemoteI2cScl = AIAVATAR_REMOTE_CAMERA_I2C_SCL;
+constexpr int kRemoteI2cPort = AIAVATAR_REMOTE_CAMERA_I2C_PORT;
+constexpr uint32_t kRemoteI2cFreq = 50000;
+constexpr uint8_t kCamI2cAddress = 0x42;
+constexpr uint16_t kCamHttpPort = 80;
+constexpr uint32_t kConfigRetryMs = 5000;
+constexpr uint32_t kStatusPollMs = 500;
+constexpr size_t kMaxConfigJson = 4096;
+constexpr size_t kMaxJpegBytes = 120 * 1024;
+constexpr size_t kI2cChunkBytes = 24;
+
+enum RemoteFrameType : uint8_t {
+    kFrameBegin = 1,
+    kFrameData = 2,
+    kFrameEnd = 3,
+};
+
+#if AIAVATAR_REMOTE_CAMERA_I2C_PORT >= 0
+m5::I2C_Class remoteCameraI2c;
+m5::I2C_Class* remoteCameraI2cBus = nullptr;
+
+bool i2cBusMatches(const m5::I2C_Class& bus) {
+    return bus.isEnabled() && bus.getPort() == kRemoteI2cPort &&
+           bus.getSDA() == kRemoteI2cSda && bus.getSCL() == kRemoteI2cScl;
+}
+
+const char* remoteCameraI2cBusName() {
+    if (remoteCameraI2cBus == &M5.In_I2C) return "in";
+    if (remoteCameraI2cBus == &M5.Ex_I2C) return "ex";
+    if (remoteCameraI2cBus == &remoteCameraI2c) return "dedicated";
+    return "none";
+}
+
+bool beginCameraI2cBus() {
+    if (remoteCameraI2cBus) return true;
+    if (i2cBusMatches(M5.In_I2C)) {
+        remoteCameraI2cBus = &M5.In_I2C;
+        return true;
+    }
+    if (i2cBusMatches(M5.Ex_I2C)) {
+        remoteCameraI2cBus = &M5.Ex_I2C;
+        return true;
+    }
+    if (!remoteCameraI2c.begin(static_cast<i2c_port_t>(kRemoteI2cPort),
+                               kRemoteI2cSda, kRemoteI2cScl)) {
+        return false;
+    }
+    remoteCameraI2cBus = &remoteCameraI2c;
+    return true;
+}
+
+bool cameraI2cWrite(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return false;
+    m5::I2C_Class* bus = remoteCameraI2cBus;
+    if (!bus || !bus->start(kCamI2cAddress, false, kRemoteI2cFreq)) {
+        return false;
+    }
+    bool ok = bus->write(data, len);
+    bool stopped = bus->stop();
+    return ok && stopped;
+}
+
+size_t cameraI2cRead(uint8_t* data, size_t len) {
+    if (!data || len == 0) return 0;
+    m5::I2C_Class* bus = remoteCameraI2cBus;
+    if (!bus || !bus->start(kCamI2cAddress, true, kRemoteI2cFreq)) {
+        return 0;
+    }
+    bool ok = bus->read(data, len, true);
+    bool stopped = bus->stop();
+    return ok && stopped ? len : 0;
+}
+#else
+TwoWire& cameraWire() {
+    return Wire;
+}
+
+bool cameraI2cWrite(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return false;
+    cameraWire().beginTransmission(kCamI2cAddress);
+    cameraWire().write(data, len);
+    return cameraWire().endTransmission() == 0;
+}
+
+size_t cameraI2cRead(uint8_t* data, size_t len) {
+    if (!data || len == 0) return 0;
+    size_t n = cameraWire().requestFrom(kCamI2cAddress, static_cast<uint8_t>(len));
+    for (size_t i = 0; i < n && i < len; ++i) {
+        data[i] = static_cast<uint8_t>(cameraWire().read());
+    }
+    return n;
+}
+#endif
+
+void sha256UpdateText(mbedtls_sha256_context& ctx, const char* text) {
+    if (!text) text = "";
+    mbedtls_sha256_update(&ctx, reinterpret_cast<const unsigned char*>(text), strlen(text));
+    const unsigned char separator = '\n';
+    mbedtls_sha256_update(&ctx, &separator, 1);
+}
+
+String makeRemoteAuthToken(const Config& config) {
+    uint8_t digest[32] = {};
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+
+    char mac[17] = {};
+    uint64_t efuseMac = ESP.getEfuseMac();
+    snprintf(mac, sizeof(mac), "%04x%08x",
+             static_cast<unsigned>((efuseMac >> 32) & 0xffff),
+             static_cast<unsigned>(efuseMac & 0xffffffff));
+
+    sha256UpdateText(ctx, "aiavatar-camera-token-v1");
+    sha256UpdateText(ctx, mac);
+    sha256UpdateText(ctx, config.wifiSsid);
+    sha256UpdateText(ctx, config.wifiPass);
+    sha256UpdateText(ctx, config.apiKey);
+    for (uint8_t i = 0; i < config.wifiNetworkCount; ++i) {
+        sha256UpdateText(ctx, config.wifiNetworks[i].ssid);
+        sha256UpdateText(ctx, config.wifiNetworks[i].pass);
+    }
+
+    mbedtls_sha256_finish(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+
+    char hex[65] = {};
+    static constexpr char kHex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(digest); ++i) {
+        hex[i * 2] = kHex[digest[i] >> 4];
+        hex[i * 2 + 1] = kHex[digest[i] & 0x0f];
+    }
+    return String(hex);
+}
+
+bool networkListed(const Config& config, const char* ssid) {
+    if (!ssid || !ssid[0]) return false;
+    for (uint8_t i = 0; i < config.wifiNetworkCount; ++i) {
+        if (strcmp(config.wifiNetworks[i].ssid, ssid) == 0) return true;
+    }
+    return false;
+}
+}  // namespace
+#else
 #if AIAVATAR_HAS_ESP_CAMERA
 static camera_config_t cameraConfig = {
     .pin_pwdn = -1,
@@ -42,9 +210,13 @@ static camera_config_t cameraConfig = {
     .sccb_i2c_port = -1,
 };
 #endif
+#endif
 
 bool CameraController::begin() {
-#if AIAVATAR_HAS_ESP_CAMERA
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    Serial.println("[Camera] AtomS3 remote camera requires config");
+    return false;
+#elif AIAVATAR_HAS_ESP_CAMERA
     M5.In_I2C.release();
     esp_err_t err = esp_camera_init(&cameraConfig);
     if (err != ESP_OK) {
@@ -66,10 +238,44 @@ bool CameraController::begin() {
 #endif
 }
 
+bool CameraController::begin(const Config& config) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    return configure(config);
+#else
+    (void)config;
+    return begin();
+#endif
+}
+
+bool CameraController::configure(const Config& config) {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (!beginRemoteI2c()) return false;
+    bool built = buildRemoteConfig(config);
+    ready_ = built;
+    if (built) {
+        sendRemoteConfig(true);
+    }
+    return ready_;
+#else
+    (void)config;
+    return ready_;
+#endif
+}
+
+void CameraController::update() {
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    if (!ready_ || !remoteI2cStarted_ || !remoteConfigBuilt_) return;
+    pollRemoteStatus();
+#endif
+}
+
 bool CameraController::captureJpeg(uint8_t** outBuf, size_t* outLen, uint8_t quality) {
     if (!ready_ || !outBuf || !outLen) return false;
 
-#if AIAVATAR_HAS_ESP_CAMERA
+#if defined(AIAVATAR_BOARD_ATOMS3)
+    (void)quality;
+    return captureRemoteJpeg(outBuf, outLen);
+#elif AIAVATAR_HAS_ESP_CAMERA
     camera_fb_t* fb = esp_camera_fb_get();
     if (fb) esp_camera_fb_return(fb);
 
@@ -96,5 +302,215 @@ bool CameraController::captureJpeg(uint8_t** outBuf, size_t* outLen, uint8_t qua
     return false;
 #endif
 }
+
+#if defined(AIAVATAR_BOARD_ATOMS3)
+bool CameraController::beginRemoteI2c() {
+    if (remoteI2cStarted_) return true;
+    pinMode(kRemoteI2cSda, INPUT_PULLUP);
+    pinMode(kRemoteI2cScl, INPUT_PULLUP);
+#if AIAVATAR_REMOTE_CAMERA_I2C_PORT >= 0
+    bool ok = beginCameraI2cBus();
+    remoteI2cStarted_ = ok;
+    Serial.printf("[Camera] AtomS3 remote I2C %s bus=%s port=%d sda=%u scl=%u addr=0x%02x\n",
+                  ok ? "ready" : "failed", remoteCameraI2cBusName(),
+                  kRemoteI2cPort, kRemoteI2cSda, kRemoteI2cScl, kCamI2cAddress);
+#else
+    cameraWire().setTimeOut(80);
+    bool ok = cameraWire().begin(kRemoteI2cSda, kRemoteI2cScl, kRemoteI2cFreq);
+    remoteI2cStarted_ = ok;
+    Serial.printf("[Camera] AtomS3 remote I2C %s sda=%u scl=%u addr=0x%02x\n",
+                  ok ? "ready" : "failed", kRemoteI2cSda, kRemoteI2cScl, kCamI2cAddress);
+#endif
+    return remoteI2cStarted_;
+}
+
+bool CameraController::buildRemoteConfig(const Config& config) {
+    String authToken = makeRemoteAuthToken(config);
+    JsonDocument doc;
+    doc["wifi_ssid"] = config.wifiSsid;
+    doc["wifi_pass"] = config.wifiPass;
+    doc["camera_token"] = authToken;
+    doc["api_key"] = authToken;
+
+    JsonArray networks = doc["wifi_networks"].to<JsonArray>();
+    if (config.wifiSsid[0] && !networkListed(config, config.wifiSsid)) {
+        JsonObject primary = networks.add<JsonObject>();
+        primary["ssid"] = config.wifiSsid;
+        primary["pass"] = config.wifiPass;
+        primary["name"] = "";
+    }
+    for (uint8_t i = 0; i < config.wifiNetworkCount; ++i) {
+        if (!config.wifiNetworks[i].ssid[0]) continue;
+        JsonObject item = networks.add<JsonObject>();
+        item["ssid"] = config.wifiNetworks[i].ssid;
+        item["pass"] = config.wifiNetworks[i].pass;
+        item["name"] = config.wifiNetworks[i].name;
+    }
+
+    String nextJson;
+    serializeJson(doc, nextJson);
+    if (nextJson.length() >= kMaxConfigJson) {
+        Serial.printf("[Camera] remote config too large: %u bytes\n",
+                      static_cast<unsigned>(nextJson.length()));
+        remoteConfigBuilt_ = false;
+        return false;
+    }
+
+    if (nextJson != remoteConfigJson_) {
+        remoteConfigJson_ = nextJson;
+        remoteAuthToken_ = authToken;
+        remoteIp_ = "";
+        remoteState_ = -1;
+        remoteLastConfigSentMs_ = 0;
+    }
+    remoteAuthToken_ = authToken;
+    remoteConfigBuilt_ = true;
+    return true;
+}
+
+bool CameraController::sendRemoteConfig(bool force) {
+    if (!remoteI2cStarted_ || !remoteConfigBuilt_ || remoteConfigJson_.isEmpty()) return false;
+    uint32_t now = millis();
+    if (!force && remoteLastConfigSentMs_ != 0 && now - remoteLastConfigSentMs_ < kConfigRetryMs) {
+        return true;
+    }
+
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(remoteConfigJson_.c_str());
+    size_t len = remoteConfigJson_.length();
+
+    auto writeFrame = [](uint8_t type, uint16_t value, const uint8_t* data, size_t dataLen) -> bool {
+        uint8_t frame[3 + kI2cChunkBytes] = {
+            type,
+            static_cast<uint8_t>(value & 0xff),
+            static_cast<uint8_t>((value >> 8) & 0xff),
+        };
+        if (data && dataLen > 0) memcpy(frame + 3, data, dataLen);
+        if (!cameraI2cWrite(frame, 3 + dataLen)) {
+            Serial.printf("[Camera] remote I2C write type=%u failed\n", type);
+            return false;
+        }
+        delay(8);
+        return true;
+    };
+
+    if (!writeFrame(kFrameBegin, static_cast<uint16_t>(len), nullptr, 0)) return false;
+    for (size_t offset = 0; offset < len; offset += kI2cChunkBytes) {
+        size_t chunk = len - offset;
+        if (chunk > kI2cChunkBytes) chunk = kI2cChunkBytes;
+        if (!writeFrame(kFrameData, static_cast<uint16_t>(offset), bytes + offset, chunk)) {
+            return false;
+        }
+    }
+    if (!writeFrame(kFrameEnd, ++remoteConfigGeneration_, nullptr, 0)) return false;
+
+    remoteLastConfigSentMs_ = now;
+    return true;
+}
+
+bool CameraController::pollRemoteStatus() {
+    if (!remoteI2cStarted_) return false;
+    uint32_t now = millis();
+    if (remoteLastStatusMs_ != 0 && now - remoteLastStatusMs_ < kStatusPollMs) {
+        return remoteState_ == 2 && remoteIp_.length() > 6;
+    }
+    remoteLastStatusMs_ = now;
+
+    char buf[96] = {};
+    uint8_t raw[sizeof(buf) - 1] = {};
+    size_t n = cameraI2cRead(raw, sizeof(raw));
+    for (size_t i = 0; i < n && i < sizeof(buf) - 1; ++i) {
+        buf[i] = static_cast<char>(raw[i]);
+    }
+    if (n == 0) {
+        remoteState_ = -1;
+        return false;
+    }
+
+    String status(buf);
+    status.trim();
+    if (!status.startsWith("R,")) {
+        Serial.printf("[Camera] remote bad status: %s\n", status.c_str());
+        remoteState_ = -1;
+        return false;
+    }
+
+    int first = status.indexOf(',', 2);
+    if (first < 0) return false;
+    int second = status.indexOf(',', first + 1);
+    String state = status.substring(2, first);
+    String ip = second > 0 ? status.substring(first + 1, second) : status.substring(first + 1);
+    remoteState_ = state.toInt();
+    if (remoteState_ == 2 && ip.length() > 6) {
+        if (ip != remoteIp_) {
+            remoteIp_ = ip;
+            Serial.printf("[Camera] remote ready ip=%s\n", remoteIp_.c_str());
+        }
+        return true;
+    }
+
+    return false;
+}
+
+bool CameraController::captureRemoteJpeg(uint8_t** outBuf, size_t* outLen) {
+    *outBuf = nullptr;
+    *outLen = 0;
+
+    if ((remoteState_ != 2 || remoteIp_.length() <= 6) && !pollRemoteStatus()) {
+        Serial.println("[Camera] remote capture skipped: camera child not ready");
+        return false;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[Camera] remote capture skipped: parent WiFi not connected");
+        return false;
+    }
+
+    String url = "http://" + remoteIp_ + ":" + String(kCamHttpPort) + "/camera";
+    HTTPClient http;
+    http.setTimeout(3500);
+    if (!http.begin(url)) {
+        Serial.println("[Camera] remote HTTP begin failed");
+        return false;
+    }
+    if (!remoteAuthToken_.isEmpty()) {
+        http.addHeader("X-Camera-Key", remoteAuthToken_);
+    }
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("[Camera] remote HTTP GET failed: %d\n", code);
+        http.end();
+        return false;
+    }
+
+    int len = http.getSize();
+    if (len <= 0 || static_cast<size_t>(len) > kMaxJpegBytes) {
+        Serial.printf("[Camera] remote JPEG length invalid: %d\n", len);
+        http.end();
+        return false;
+    }
+
+    uint8_t* jpg = static_cast<uint8_t*>(ps_malloc(len));
+    if (!jpg) jpg = static_cast<uint8_t*>(malloc(len));
+    if (!jpg) {
+        Serial.printf("[Camera] remote JPEG allocation failed: %d bytes\n", len);
+        http.end();
+        return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    size_t got = stream->readBytes(jpg, len);
+    http.end();
+    if (got != static_cast<size_t>(len)) {
+        Serial.printf("[Camera] remote JPEG short read: %u/%d\n",
+                      static_cast<unsigned>(got), len);
+        free(jpg);
+        return false;
+    }
+
+    *outBuf = jpg;
+    *outLen = got;
+    return true;
+}
+#endif
 
 }  // namespace aiavatar

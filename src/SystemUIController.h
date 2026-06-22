@@ -28,6 +28,13 @@ enum class ButtonAction : uint8_t {
     PushToTalk,
 };
 
+enum class UiButtonEvent : uint8_t {
+    SingleClick = 0,
+    DoubleClick,
+    Hold,
+    HoldRelease,
+};
+
 class SystemUIController {
 public:
     SystemUIController();
@@ -49,6 +56,7 @@ public:
     void setVirtualButtonArea(ButtonId id, UiRect area);
     void setButtonAction(ButtonId id, ButtonAction action);
     void runButtonAction(ButtonId id);
+    void handleButtonEvent(UiButtonEvent event);
     void setSystemBarHeight(int16_t height) { systemBarHeight_ = height; }
     void setMenuHorizontalMargin(int16_t margin) { menuHorizontalMargin_ = margin; }
     void setMenuItemHeight(int16_t height) { menuItemHeight_ = height; }
@@ -95,6 +103,14 @@ private:
         IdleMotionInterval,
     };
 
+    enum class AtomSettingMode : uint8_t {
+        HomeMute = 0,
+        Volume,
+        Brightness,
+        WiFi,
+        Count,
+    };
+
     AIAvatar* avatar_;
     const Config* config_;
     StatusOverlay* statusOverlay_;
@@ -118,6 +134,14 @@ private:
     int16_t toolCategoryScrollOffset_;
     int16_t toolScrollOffset_;
     bool settingsHoldActive_;
+    bool buttonNavigationActive_;
+    bool uiAudioMuteActive_;
+    bool uiAudioMuteSavedMic_;
+    bool uiAudioMuteSavedSpeaker_;
+    AtomSettingMode atomSettingMode_;
+    uint32_t atomSettingLastInputMs_;
+    uint32_t atomFeedbackUntilMs_;
+    char atomFeedbackText_[32];
     HoldTarget settingsHoldTarget_;
     int8_t settingsHoldDelta_;
     uint32_t settingsHoldNextMs_;
@@ -153,8 +177,28 @@ private:
     static constexpr int16_t kSettingsStepperButtonSize = 58;
     static constexpr uint32_t kSettingsHoldStartMs = 450;
     static constexpr uint32_t kSettingsHoldRepeatMs = 45;
+    static constexpr uint32_t kAtomSettingIdleMs = 5000;
+    static constexpr uint32_t kAtomFeedbackMs = 1000;
+    static constexpr int8_t kAtomPercentStep = 10;
 
     void recordTouch(const m5::touch_detail_t& detail);
+    void updateBuiltInButton();
+    void updateAtomSettingMode();
+    void beginUiAudioMute();
+    void restoreUiAudioMuteIfIdle();
+    bool uiAudioMuteRequired() const;
+    void toggleAudioMutePair();
+    void handleButtonBack();
+    void handleAtomButtonEvent(UiButtonEvent event);
+    void advanceAtomSettingMode();
+    void setAtomSettingMode(AtomSettingMode mode);
+    void applyAtomSettingDelta(int8_t delta);
+    void showAtomFeedback(const char* format, ...);
+    int8_t currentWifiIndex() const;
+    void switchAtomWifi(int8_t delta);
+    void activateSelectedSetting();
+    void advanceSettingsSelection();
+    void ensureSettingsSelectionVisible();
     bool touchMovedBeyondTapThreshold() const;
     bool consumeSwipe(const m5::touch_detail_t& detail);
     void setUiVisible(bool visible);
@@ -219,6 +263,9 @@ private:
     void drawNetworkMenu(LGFX_Sprite* canvas) const;
     void drawSettings(LGFX_Sprite* canvas) const;
     void drawToolMenu(LGFX_Sprite* canvas) const;
+    void drawAtomSettingOverlay(LGFX_Sprite* canvas) const;
+    void drawAtomHomeFeedback(LGFX_Sprite* canvas) const;
+    bool atomFeedbackVisible() const;
     void drawSettingsHeader(LGFX_Sprite* canvas, const char* title) const;
     void drawSettingsRoot(LGFX_Sprite* canvas) const;
     void drawSettingsItem(LGFX_Sprite* canvas, uint8_t index) const;

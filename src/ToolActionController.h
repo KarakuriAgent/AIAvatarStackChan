@@ -51,6 +51,7 @@ private:
         Motion,
         Audio,
         Animation,
+        Scene,
     };
 
     enum class ActionStartResult : uint8_t {
@@ -85,7 +86,10 @@ private:
     struct ToolAction {
         ActionType type;
         char value[96];
+        char auxValue[96];
+        char extraValue[40];
         uint8_t repeat;
+        uint32_t durationMs;
     };
 
     struct ToolDef {
@@ -150,6 +154,10 @@ private:
     uint32_t animationNextMs_;
     uint8_t* animationFrameData_;
     size_t animationFrameLen_;
+    bool sceneRunning_;
+    bool sceneMotionEnabled_;
+    bool sceneAnimationEnabled_;
+    uint32_t sceneEndMs_;
 
     void resetDefinitions();
     void resetRuntime();
@@ -183,8 +191,12 @@ private:
 
     ActionStartResult startAnimationAction(const ToolAction& action);
     bool updateAnimationAction();
+    bool updateSceneAnimationAction(bool expired);
     bool loadAnimationFrame();
     void freeAnimationFrame();
+
+    ActionStartResult startSceneAction(const ToolAction& action);
+    bool updateSceneAction(const ToolAction& action);
 };
 
 }  // namespace aiavatar
