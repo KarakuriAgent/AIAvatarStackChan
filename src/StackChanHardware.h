@@ -38,6 +38,8 @@ private:
 
     bool beginDirectScs(const Config& config);
     int16_t applyYawOffset(int16_t yaw) const;
+    void writeScsRegister(uint8_t id, uint8_t address, const uint8_t* data, uint8_t len);
+    void setScsTorqueEnabled(uint8_t id, bool enabled);
     void writeScsPosition(uint8_t id, uint16_t position, uint16_t timeMs, uint16_t speed);
     uint16_t degreeToScsPosition(int16_t degree) const;
 };

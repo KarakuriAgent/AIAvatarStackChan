@@ -19,6 +19,7 @@ namespace {
 static constexpr uint8_t kStackChanIoExpanderAddress = 0x6F;
 static constexpr uint8_t kStackChanVersionRegister = 0x02;
 static constexpr uint8_t kScsWriteInstruction = 0x03;
+static constexpr uint8_t kScsTorqueEnableAddress = 40;
 static constexpr uint8_t kScsGoalPositionAddress = 42;
 static constexpr uint32_t kScsBaud = 1000000;
 static constexpr int16_t kScsMinDegree = 0;
@@ -103,6 +104,8 @@ bool StackChanHardware::beginDirectScs(const Config& config) {
     Serial.printf("[StackChan] direct SCS initialized rx=%u tx=%u idX=%u idY=%u yawOffset=%d takaoBase=%d\n",
                   config.servoRxPin, config.servoTxPin, servoIdX_, servoIdY_,
                   servoYawOffsetDegree_, config.takaoBase ? 1 : 0);
+    setScsTorqueEnabled(servoIdX_, true);
+    setScsTorqueEnabled(servoIdY_, true);
     return true;
 }
 
@@ -213,31 +216,49 @@ void StackChanHardware::refreshLed() {
 #endif
 }
 
-void StackChanHardware::writeScsPosition(uint8_t id, uint16_t position, uint16_t timeMs,
-                                         uint16_t speed) {
-    uint8_t packet[13] = {
+void StackChanHardware::writeScsRegister(uint8_t id, uint8_t address, const uint8_t* data,
+                                         uint8_t len) {
+    if (!data || len == 0 || len > 8) return;
+
+    while (Serial2.available()) {
+        Serial2.read();
+    }
+
+    uint8_t packet[14] = {
         0xFF,
         0xFF,
         id,
-        9,
+        static_cast<uint8_t>(len + 3),
         kScsWriteInstruction,
-        kScsGoalPositionAddress,
+        address,
+    };
+    uint16_t sum = packet[2] + packet[3] + packet[4] + packet[5];
+    for (uint8_t i = 0; i < len; ++i) {
+        packet[6 + i] = data[i];
+        sum += data[i];
+    }
+    packet[6 + len] = static_cast<uint8_t>(~sum);
+
+    Serial2.write(packet, 7 + len);
+    Serial2.flush();
+}
+
+void StackChanHardware::setScsTorqueEnabled(uint8_t id, bool enabled) {
+    uint8_t value = enabled ? 1 : 0;
+    writeScsRegister(id, kScsTorqueEnableAddress, &value, 1);
+}
+
+void StackChanHardware::writeScsPosition(uint8_t id, uint16_t position, uint16_t timeMs,
+                                         uint16_t speed) {
+    uint8_t data[6] = {
         static_cast<uint8_t>((position >> 8) & 0xFF),
         static_cast<uint8_t>(position & 0xFF),
         static_cast<uint8_t>((timeMs >> 8) & 0xFF),
         static_cast<uint8_t>(timeMs & 0xFF),
         static_cast<uint8_t>((speed >> 8) & 0xFF),
         static_cast<uint8_t>(speed & 0xFF),
-        0,
     };
-
-    uint16_t sum = 0;
-    for (uint8_t i = 2; i < 12; ++i) {
-        sum += packet[i];
-    }
-    packet[12] = static_cast<uint8_t>(~sum);
-    Serial2.write(packet, sizeof(packet));
-    Serial2.flush();
+    writeScsRegister(id, kScsGoalPositionAddress, data, sizeof(data));
 }
 
 uint16_t StackChanHardware::degreeToScsPosition(int16_t degree) const {
