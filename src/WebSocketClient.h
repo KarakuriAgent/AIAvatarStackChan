@@ -20,6 +20,15 @@ struct IncomingAudioChunk {
     float faceDurationSec;
 };
 
+struct ToolProgressEvent {
+    const char* taskId;
+    const char* toolName;
+    const char* status;
+    const char* request;
+    const char* progress;
+    const char* reportChannel;
+};
+
 using ConnectionCallback = void (*)(bool connected);
 using AudioChunkCallback = void (*)(const IncomingAudioChunk& chunk);
 using TextCallback = void (*)(const char* text);
@@ -28,6 +37,7 @@ using SimpleCallback = void (*)();
 using ProcessingCallback = void (*)(bool processing);
 using FaceCallback = void (*)(const char* faceName, float durationSec);
 using ToolCallCallback = void (*)(const char* toolName);
+using ToolProgressCallback = void (*)(const ToolProgressEvent& event);
 using VisionCallback = void (*)();
 using AudioFrameReadCallback = bool (*)(int16_t* dest, void* context);
 using AudioFrameClearCallback = void (*)(void* context);
@@ -54,6 +64,7 @@ public:
     void onProcessing(ProcessingCallback cb) { processingCb_ = cb; }
     void onFace(FaceCallback cb) { faceCb_ = cb; }
     void onToolCall(ToolCallCallback cb) { toolCallCb_ = cb; }
+    void onToolProgress(ToolProgressCallback cb) { toolProgressCb_ = cb; }
     void onVision(VisionCallback cb) { visionCb_ = cb; }
 
     bool configureAudioUpload(const AudioFrameProvider& provider, size_t frameSamples,
@@ -78,6 +89,7 @@ public:
     bool reserveInvokeAudioBuffer(size_t sampleCount);
     bool sendInvokeWithAudio(const int16_t* pcmData, size_t sampleCount);
     void sendStop();
+    void sendCancel(const char* reason = nullptr);
 
     bool isConnected() const { return connected_; }
     // 接続維持(自動再接続)が有効か。disconnect()でfalse、begin()/reconnect()でtrueになる。
@@ -106,6 +118,7 @@ private:
     ProcessingCallback processingCb_;
     FaceCallback faceCb_;
     ToolCallCallback toolCallCb_;
+    ToolProgressCallback toolProgressCb_;
     VisionCallback visionCb_;
 
     int16_t* audioTxBuf_;

@@ -41,6 +41,7 @@ WebSocketClient::WebSocketClient()
       processingCb_(nullptr),
       faceCb_(nullptr),
       toolCallCb_(nullptr),
+      toolProgressCb_(nullptr),
       visionCb_(nullptr),
       audioTxBuf_(nullptr),
       audioTxEncodedBuf_(nullptr),
@@ -582,6 +583,18 @@ void WebSocketClient::sendStop() {
     if (stopCb_) stopCb_();
 }
 
+void WebSocketClient::sendCancel(const char* reason) {
+    if (!connected_) return;
+    JsonDocument doc;
+    doc["type"] = "cancel";
+    doc["session_id"] = sessionId_;
+    JsonObject metadata = doc["metadata"].to<JsonObject>();
+    metadata["reason"] = reason && reason[0] ? reason : "user_cancelled";
+    String out;
+    serializeJson(doc, out);
+    ws_.sendTXT(out);
+}
+
 void WebSocketClient::onEventStatic(WStype_t type, uint8_t* payload, size_t length) {
     if (s_wsInstance) s_wsInstance->onEvent(type, payload, length);
 }
@@ -645,7 +658,7 @@ void WebSocketClient::onEvent(WStype_t type, uint8_t* payload, size_t length) {
                 if (stopCb_) stopCb_();
                 return;
             }
-            if (strcmp(msgType, "canceled") == 0) {
+            if (strcmp(msgType, "canceled") == 0 || strcmp(msgType, "cancelled") == 0) {
                 if (stopCb_) stopCb_();
                 if (processingCb_) processingCb_(false);
                 return;
@@ -659,6 +672,29 @@ void WebSocketClient::onEvent(WStype_t type, uint8_t* payload, size_t length) {
                 const char* toolName =
                     doc["metadata"]["tool_call"]["name"] | static_cast<const char*>(nullptr);
                 if (toolName && toolCallCb_) toolCallCb_(toolName);
+                return;
+            }
+            if (strcmp(msgType, "tool_progress") == 0) {
+                if (toolProgressCb_) {
+                    JsonVariant metadata = doc["metadata"];
+                    if (!metadata["tool_progress"].isNull()) {
+                        metadata = metadata["tool_progress"];
+                    }
+                    ToolProgressEvent event = {};
+                    event.taskId = metadata["task_id"] | doc["task_id"] |
+                                   static_cast<const char*>(nullptr);
+                    event.toolName = metadata["tool_name"] | doc["tool_name"] |
+                                     static_cast<const char*>(nullptr);
+                    event.status = metadata["status"] | doc["status"] |
+                                   static_cast<const char*>(nullptr);
+                    event.request = metadata["request"] | doc["request"] |
+                                    static_cast<const char*>(nullptr);
+                    event.progress = metadata["progress"] | doc["progress"] |
+                                     static_cast<const char*>(nullptr);
+                    event.reportChannel = metadata["report_channel"] | doc["report_channel"] |
+                                          static_cast<const char*>(nullptr);
+                    toolProgressCb_(event);
+                }
                 return;
             }
             if (strcmp(msgType, "vision") == 0) {

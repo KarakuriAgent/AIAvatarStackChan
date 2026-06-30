@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <strings.h>
 #include "mbedtls/base64.h"
 
 namespace aiavatar {
@@ -28,6 +29,31 @@ constexpr uint8_t kNoWifiNetworkIndex = 0xff;
 constexpr uint32_t kSettingsSaveDebounceMs = 700;
 constexpr uint32_t kNetworkUpdateWsDisconnectWaitMs = 3000;
 constexpr uint32_t kNetworkUpdateWsSettleMs = 100;
+constexpr uint32_t kToolProgressTtlMs = 10000;
+
+bool isTerminalToolProgressStatus(const char* status) {
+    if (!status || !status[0]) return false;
+    return strcasecmp(status, "completed") == 0 ||
+           strcasecmp(status, "complete") == 0 ||
+           strcasecmp(status, "done") == 0 ||
+           strcasecmp(status, "cancelled") == 0 ||
+           strcasecmp(status, "canceled") == 0 ||
+           strcasecmp(status, "failed") == 0 ||
+           strcasecmp(status, "error") == 0 ||
+           strcasecmp(status, "timeout") == 0;
+}
+
+bool isToolCompletionResponseRequest(const char* text) {
+    if (!text || !text[0]) return false;
+    return strstr(text, "OpenClawから応答") != nullptr ||
+           strstr(text, "OpenClaw has responded") != nullptr ||
+           strstr(text, "OpenClaw has returned") != nullptr ||
+           strstr(text, "OpenClaw returned") != nullptr ||
+           strstr(text, "Hermesから応答") != nullptr ||
+           strstr(text, "Hermes has responded") != nullptr ||
+           strstr(text, "Hermes has returned") != nullptr ||
+           strstr(text, "Hermes returned") != nullptr;
+}
 
 }  // namespace
 
@@ -48,7 +74,9 @@ AIAvatar::AIAvatar()
       pushToTalkActive_(false),
       pttSendPending_(false),
       visionRequestPending_(false),
-      wsStopPending_(false),
+      conversationProcessingEffectActive_(false),
+      toolProgressActive_(false),
+      wsCancelPending_(false),
       stackChanHardwareEnabled_(false),
       wifiStarted_(false),
       speakerReady_(false),
@@ -83,6 +111,7 @@ AIAvatar::AIAvatar()
       pttBufPos_(0),
       pttStartMs_(0),
       pttSendRetryMs_(0),
+      toolProgressUntilMs_(0),
       visionPreviewJpg_(nullptr),
       visionPreviewJpgLen_(0),
       visionPreviewUntilMs_(0),
@@ -99,7 +128,9 @@ AIAvatar::AIAvatar()
       userToolCallCb_(nullptr),
       userAcceptedCb_(nullptr),
       userNadeCb_(nullptr),
-      userOverlayCb_(nullptr) {}
+      userOverlayCb_(nullptr) {
+    wsCancelReason_[0] = '\0';
+}
 
 bool AIAvatar::useStackChan() {
     if (!stackChanHardware_.begin()) return false;
@@ -358,6 +389,7 @@ bool AIAvatar::beginNormal() {
     ws_.onProcessing(AIAvatar::onProcessingStatic);
     ws_.onStart(AIAvatar::onStartStatic);
     ws_.onToolCall(AIAvatar::onToolCallStatic);
+    ws_.onToolProgress(AIAvatar::onToolProgressStatic);
     ws_.onVision(AIAvatar::onVisionStatic);
     ws_.onAccepted(AIAvatar::onAcceptedStatic);
     ws_.onError(AIAvatar::onErrorStatic);
@@ -425,6 +457,7 @@ void AIAvatar::update() {
                    !systemUI_.toolMenuOpen() && !toolActions_.motionRunning());
     leds_.update();
     openClaw_.update();
+    updateToolProgressTimeout();
     if (visualEffects_.update()) {
         display_.setDirty();
     }
@@ -535,6 +568,7 @@ void AIAvatar::beginDeferredWebSocket() {
     ws_.onProcessing(AIAvatar::onProcessingStatic);
     ws_.onStart(AIAvatar::onStartStatic);
     ws_.onToolCall(AIAvatar::onToolCallStatic);
+    ws_.onToolProgress(AIAvatar::onToolProgressStatic);
     ws_.onVision(AIAvatar::onVisionStatic);
     ws_.onAccepted(AIAvatar::onAcceptedStatic);
     ws_.onError(AIAvatar::onErrorStatic);
@@ -727,7 +761,7 @@ void AIAvatar::cycleVolume() {
 }
 
 bool AIAvatar::cancelPlayback() {
-    bool active = serverProcessing_;
+    bool active = serverProcessing_ || toolProgressActive_;
     if (speakerReady_) {
         active = active || playbackActive_ || speaker_.isPlaying() || speaker_.queuedSamples() > 0;
     }
@@ -736,9 +770,10 @@ bool AIAvatar::cancelPlayback() {
     resetSleepTimer("playback cancel");
     if (speakerReady_) speaker_.requestImmediateStop();
     serverProcessing_ = false;
-    visualEffects_.setProcessing(false);
+    setConversationProcessingEffect(false);
+    clearToolProgress();
     visualEffects_.clearToolPulse();
-    wsStopPending_ = true;
+    queueCancelRequest("user_cancelled");
     if (config_.fastStartup) heavyDeferredResumeMs_ = millis() + 500;
     display_.setDirty();
     Serial.println("[AIAvatar] playback cancel");
@@ -757,7 +792,7 @@ bool AIAvatar::startPushToTalk() {
         return false;
     }
     serverProcessing_ = false;
-    visualEffects_.setProcessing(false);
+    setConversationProcessingEffect(false);
     if (speakerReady_) speaker_.requestImmediateStop();
     mic_.clearQueue();
     pttBufPos_ = 0;
@@ -803,8 +838,15 @@ void AIAvatar::setOpenClawEffectEnabled(bool enabled) {
 }
 
 void AIAvatar::sendStop() {
-    resetSleepTimer("stop");
-    wsStopPending_ = true;
+    resetSleepTimer("cancel");
+    if (speakerReady_) speaker_.requestImmediateStop();
+    serverProcessing_ = false;
+    setConversationProcessingEffect(false);
+    clearToolProgress();
+    visualEffects_.clearToolPulse();
+    queueCancelRequest("user_cancelled");
+    if (config_.fastStartup) heavyDeferredResumeMs_ = millis() + 500;
+    display_.setDirty();
 }
 
 void AIAvatar::connectWebSocket() {
@@ -814,6 +856,46 @@ void AIAvatar::connectWebSocket() {
 
 void AIAvatar::disconnectWebSocket() {
     wsDisconnectPending_ = true;
+}
+
+void AIAvatar::queueCancelRequest(const char* reason) {
+    strlcpy(wsCancelReason_, reason && reason[0] ? reason : "user_cancelled",
+            sizeof(wsCancelReason_));
+    wsCancelPending_ = true;
+}
+
+void AIAvatar::updateProcessingEffect() {
+    visualEffects_.setProcessing(conversationProcessingEffectActive_ || toolProgressActive_);
+}
+
+void AIAvatar::setConversationProcessingEffect(bool active) {
+    conversationProcessingEffectActive_ = active;
+    updateProcessingEffect();
+}
+
+void AIAvatar::setToolProgressActive(bool active) {
+    toolProgressActive_ = active;
+    toolProgressUntilMs_ = active ? millis() + kToolProgressTtlMs : 0;
+    updateProcessingEffect();
+}
+
+void AIAvatar::clearToolProgress() {
+    if (!toolProgressActive_ && toolProgressUntilMs_ == 0) return;
+    toolProgressActive_ = false;
+    toolProgressUntilMs_ = 0;
+    updateProcessingEffect();
+}
+
+void AIAvatar::updateToolProgressTimeout() {
+    if (!toolProgressActive_) return;
+    if (static_cast<int32_t>(millis() - toolProgressUntilMs_) < 0) return;
+
+    Serial.println("[AIAvatar] tool progress timed out; cancelling");
+    clearToolProgress();
+    visualEffects_.clearToolPulse();
+    queueCancelRequest("tool_progress_timeout");
+    if (config_.fastStartup) heavyDeferredResumeMs_ = millis() + 500;
+    display_.setDirty();
 }
 
 void AIAvatar::prepareNetworkUpdate(const char* reason) {
@@ -1141,9 +1223,12 @@ void AIAvatar::runWebSocket() {
             ws_.reconnect(config_.wsHost, config_.wsPort, config_.wsPath, config_.userId,
                           config_.wsReconnectIntervalMs, config_.channel, config_.apiKey);
         }
-        if (wsStopPending_) {
-            wsStopPending_ = false;
-            ws_.sendStop();
+        if (wsCancelPending_) {
+            wsCancelPending_ = false;
+            char reason[sizeof(wsCancelReason_)];
+            strlcpy(reason, wsCancelReason_, sizeof(reason));
+            wsCancelReason_[0] = '\0';
+            ws_.sendCancel(reason[0] ? reason : "user_cancelled");
         }
 
         ws_.loop();
@@ -1664,7 +1749,7 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
     SpeakerOutput& speaker = s_instance->speaker_;
     if (s_instance->effectiveSpeakerMuted()) {
         if (chunk.pcmData && chunk.pcmSamples > 0) {
-            s_instance->visualEffects_.setProcessing(false);
+            s_instance->setConversationProcessingEffect(false);
             s_instance->visualEffects_.clearToolPulse();
             s_instance->display_.setDirty();
         }
@@ -1678,7 +1763,7 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
                             durationMs);
     }
     if (chunk.pcmData && chunk.pcmSamples > 0) {
-        s_instance->visualEffects_.setProcessing(false);
+        s_instance->setConversationProcessingEffect(false);
         s_instance->visualEffects_.clearToolPulse();
         s_instance->display_.setDirty();
         if (chunk.sampleRate > 0) {
@@ -1691,7 +1776,7 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
 void AIAvatar::onFinalStatic() {
     if (!s_instance) return;
     s_instance->resetSleepTimer("final");
-    s_instance->visualEffects_.setProcessing(false);
+    s_instance->setConversationProcessingEffect(false);
     s_instance->visualEffects_.clearToolPulse();
     s_instance->display_.setDirty();
     if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
@@ -1709,7 +1794,8 @@ void AIAvatar::onFinalTextStatic(const char* responseText, const char* voiceText
 void AIAvatar::onStopStatic() {
     if (!s_instance) return;
     s_instance->serverProcessing_ = false;
-    s_instance->visualEffects_.setProcessing(false);
+    s_instance->setConversationProcessingEffect(false);
+    s_instance->clearToolProgress();
     s_instance->visualEffects_.clearToolPulse();
     s_instance->display_.setDirty();
     if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
@@ -1726,7 +1812,7 @@ void AIAvatar::onProcessingStatic(bool processing) {
     if (!s_instance) return;
     if (processing) s_instance->resetSleepTimer("processing");
     s_instance->serverProcessing_ = processing;
-    s_instance->visualEffects_.setProcessing(processing);
+    s_instance->setConversationProcessingEffect(processing);
     if (s_instance->config_.fastStartup && !processing) {
         s_instance->heavyDeferredResumeMs_ = millis() + 500;
     }
@@ -1736,7 +1822,8 @@ void AIAvatar::onProcessingStatic(bool processing) {
 void AIAvatar::onErrorStatic() {
     if (!s_instance) return;
     s_instance->serverProcessing_ = false;
-    s_instance->visualEffects_.setProcessing(false);
+    s_instance->setConversationProcessingEffect(false);
+    s_instance->clearToolProgress();
     s_instance->visualEffects_.clearToolPulse();
     s_instance->visualEffects_.showErrorFlash();
     if (s_instance->config_.fastStartup) {
@@ -1748,6 +1835,10 @@ void AIAvatar::onErrorStatic() {
 void AIAvatar::onStartStatic(const char* text) {
     if (!s_instance) return;
     s_instance->resetSleepTimer("speech start");
+    if (s_instance->toolProgressActive_ && isToolCompletionResponseRequest(text)) {
+        s_instance->clearToolProgress();
+        s_instance->visualEffects_.clearToolPulse();
+    }
     s_instance->interruptPlaybackForNewResponse();
     s_instance->openClaw_.handleResponseStart(text);
     if (s_instance->userStartCb_) s_instance->userStartCb_(text);
@@ -1757,6 +1848,9 @@ void AIAvatar::onToolCallStatic(const char* toolName) {
     if (!s_instance) return;
     s_instance->resetSleepTimer("tool call");
     s_instance->visualEffects_.showToolPulse();
+    if (toolName && strcmp(toolName, OpenClawEffects::kToolName) == 0) {
+        s_instance->setToolProgressActive(true);
+    }
     s_instance->display_.setDirty();
     bool builtInHandled = s_instance->openClaw_.handleToolCall(toolName);
     bool sdHandled = false;
@@ -1767,10 +1861,35 @@ void AIAvatar::onToolCallStatic(const char* toolName) {
     if (!sdHandled && s_instance->userToolCallCb_) s_instance->userToolCallCb_(toolName);
 }
 
+void AIAvatar::onToolProgressStatic(const ToolProgressEvent& event) {
+    if (!s_instance) return;
+
+    const char* status = event.status ? event.status : "";
+    if (isTerminalToolProgressStatus(status)) {
+        Serial.printf("[AIAvatar] tool progress ended task=%s status=%s\n",
+                      event.taskId ? event.taskId : "", status);
+        s_instance->clearToolProgress();
+        s_instance->visualEffects_.clearToolPulse();
+        if (s_instance->config_.fastStartup) {
+            s_instance->heavyDeferredResumeMs_ = millis() + 500;
+        }
+        s_instance->display_.setDirty();
+        return;
+    }
+
+    s_instance->resetSleepTimer("tool progress");
+    s_instance->setToolProgressActive(true);
+    Serial.printf("[AIAvatar] tool progress task=%s status=%s tool=%s\n",
+                  event.taskId ? event.taskId : "",
+                  status,
+                  event.toolName ? event.toolName : "");
+    s_instance->display_.setDirty();
+}
+
 void AIAvatar::onVisionStatic() {
     if (!s_instance) return;
     s_instance->resetSleepTimer("vision");
-    s_instance->visualEffects_.setProcessing(false);
+    s_instance->setConversationProcessingEffect(false);
     s_instance->visualEffects_.clearToolPulse();
     s_instance->visualEffects_.showVisionFlash();
     s_instance->display_.setDirty();

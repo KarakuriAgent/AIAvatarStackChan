@@ -111,6 +111,7 @@ public:
     uint8_t currentVolumeLevel() const { return volumeLevelIndex_; }
     uint8_t volumeLevelCount() const { return config_.volumeLevelCount; }
     uint8_t currentVolume() const { return volume_; }
+    bool isToolProgressActive() const { return toolProgressActive_; }
     const char* firmwareVersion() const;
     const char* firmwareReleaseDate() const;
     const char* otaManifestUrl() const { return config_.otaManifestUrl; }
@@ -182,7 +183,9 @@ private:
     volatile bool pushToTalkActive_;
     volatile bool pttSendPending_;
     volatile bool visionRequestPending_;
-    volatile bool wsStopPending_;
+    volatile bool conversationProcessingEffectActive_;
+    volatile bool toolProgressActive_;
+    volatile bool wsCancelPending_;
     bool stackChanHardwareEnabled_;
     bool wifiStarted_;
     bool speakerReady_;
@@ -217,6 +220,8 @@ private:
     volatile size_t pttBufPos_;
     uint32_t pttStartMs_;
     uint32_t pttSendRetryMs_;
+    uint32_t toolProgressUntilMs_;
+    char wsCancelReason_[48];
     uint8_t* visionPreviewJpg_;
     size_t visionPreviewJpgLen_;
     uint32_t visionPreviewUntilMs_;
@@ -249,6 +254,12 @@ private:
     void handlePttSend();
     void handleInvokeTextSend();
     void handleVisionRequest();
+    void queueCancelRequest(const char* reason);
+    void updateProcessingEffect();
+    void setConversationProcessingEffect(bool active);
+    void setToolProgressActive(bool active);
+    void clearToolProgress();
+    void updateToolProgressTimeout();
     void updateDeferredStartup();
     void beginDeferredWiFi();
     void beginDeferredSpeaker();
@@ -290,6 +301,7 @@ private:
     static void onErrorStatic();
     static void onStartStatic(const char* text);
     static void onToolCallStatic(const char* toolName);
+    static void onToolProgressStatic(const ToolProgressEvent& event);
     static void onVisionStatic();
     static void onAcceptedStatic();
     static void onNadeStatic();
