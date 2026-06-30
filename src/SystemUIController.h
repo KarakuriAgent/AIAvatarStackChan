@@ -182,7 +182,7 @@ private:
     void recordTouch(const m5::touch_detail_t& detail);
     void updateBuiltInButton();
     void updateAtomSettingMode();
-    void beginUiAudioMute();
+    void beginUiAudioMute(bool speakerMuted = true);
     void restoreUiAudioMuteIfIdle();
     bool uiAudioMuteRequired() const;
     void toggleAudioMutePair();

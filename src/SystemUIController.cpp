@@ -1108,10 +1108,10 @@ void SystemUIController::updateAtomSettingMode() {
 #endif
 }
 
-void SystemUIController::beginUiAudioMute() {
-    if (!avatar_ || uiAudioMuteActive_) return;
+void SystemUIController::beginUiAudioMute(bool speakerMuted) {
+    if (!avatar_) return;
     uiAudioMuteActive_ = true;
-    avatar_->setTemporaryAudioMute(true, true);
+    avatar_->setTemporaryAudioMute(true, speakerMuted);
 }
 
 void SystemUIController::restoreUiAudioMuteIfIdle() {
@@ -1237,7 +1237,7 @@ void SystemUIController::setAtomSettingMode(AtomSettingMode mode) {
     if (atomSettingMode_ == AtomSettingMode::HomeMute) {
         restoreUiAudioMuteIfIdle();
     } else {
-        beginUiAudioMute();
+        beginUiAudioMute(atomSettingMode_ != AtomSettingMode::Volume);
     }
     avatar_->display().setDirty();
 }
@@ -1900,6 +1900,7 @@ void SystemUIController::runSettingsAction(uint8_t index) {
             break;
         case SettingsItem::Speaker:
             settingsView_ = SettingsView::Speaker;
+            beginUiAudioMute(false);
             break;
         case SettingsItem::WiFi:
             settingsView_ = SettingsView::WiFi;
@@ -1928,6 +1929,7 @@ void SystemUIController::handleSettingsBack() {
         return;
     }
     settingsView_ = SettingsView::Root;
+    beginUiAudioMute();
     settingsHoldActive_ = false;
     settingsHoldTarget_ = HoldTarget::None;
     avatar_->display().setDirty();

@@ -159,12 +159,6 @@ bool AIAvatar::begin(const Config& config, const ResourceProvider& resources) {
     defaultResources_ = resources;
     config_ = config;
     loadPersistedSettings();
-#if defined(AIAVATAR_BOARD_ATOMS3)
-    if (config_.displayBrightness < 96) {
-        config_.displayBrightness = 160;
-        Serial.println("[Settings] AtomS3 display brightness raised to 160");
-    }
-#endif
     otaTrust_.clear();
     otaTrust_.loadFromBuiltin(defaultResources_);
     idleAudioAccumulator_.reset();

@@ -4,7 +4,6 @@
 #include "AIAvatarStackChan.h"
 
 #if defined(AIAVATAR_BOARD_ATOMS3)
-static constexpr uint8_t kAtomS3MinDisplayBrightness = 96;
 static constexpr uint8_t kAtomS3DefaultDisplayBrightness = 160;
 #endif
 
@@ -24,9 +23,6 @@ static void applyBoardProfile(aiavatar::Config& cfg) {
     if (cfg.pttMaxSeconds > 8) cfg.pttMaxSeconds = 8;
     if (cfg.playbackQueueDepth > 32) cfg.playbackQueueDepth = 32;
     cfg.displayRotation = 1;
-    if (cfg.displayBrightness < kAtomS3MinDisplayBrightness) {
-        cfg.displayBrightness = kAtomS3DefaultDisplayBrightness;
-    }
     cfg.statusOverlayEnabled = false;
     cfg.fastStartup = true;
     Serial.printf("[Main] AtomS3 profile pttMaxSeconds=%u playbackQueueDepth=%u rotation=%u brightness=%u\n",
@@ -46,15 +42,7 @@ static void configureBodyHardware() {
 #endif
 }
 
-static void applyRuntimeBoardProfile() {
-#if defined(AIAVATAR_BOARD_ATOMS3)
-    if (avatar.displayBrightness() < kAtomS3MinDisplayBrightness) {
-        avatar.setDisplayBrightness(kAtomS3DefaultDisplayBrightness);
-        Serial.printf("[Main] AtomS3 restored display brightness=%u\n",
-                      kAtomS3DefaultDisplayBrightness);
-    }
-#endif
-}
+static void applyRuntimeBoardProfile() {}
 
 static void showAtomS3DisplayProbe() {
 #if defined(AIAVATAR_BOARD_ATOMS3) && defined(AIAVATAR_ATOMS3_DISPLAY_PROBE)
