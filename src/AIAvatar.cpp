@@ -36,6 +36,8 @@ AIAvatar* AIAvatar::s_instance = nullptr;
 AIAvatar::AIAvatar()
     : micMuted_(false),
       speakerMuted_(false),
+      temporaryMicMuted_(false),
+      temporarySpeakerMuted_(false),
       serverProcessing_(false),
       wsConnectPending_(false),
       wsDisconnectPending_(false),
@@ -655,7 +657,7 @@ void AIAvatar::setSpeakerMuted(bool muted) {
     resetSleepTimer("speaker mute");
     speakerMuted_ = muted;
     if (speakerReady_) speaker_.setVolume(effectiveSpeakerVolume());
-    if (speakerMuted_) cancelPlayback();
+    if (effectiveSpeakerMuted()) cancelPlayback();
     display_.setDirty();
     queueSettingsSave(false, true, false, false, false);
 }
@@ -665,15 +667,13 @@ void AIAvatar::toggleSpeakerMuted() {
 }
 
 void AIAvatar::setTemporaryAudioMute(bool micMuted, bool speakerMuted) {
-#if defined(AIAVATAR_BOARD_ATOMS3)
-    micMuted = true;
-#endif
-    bool changed = micMuted_ != micMuted || speakerMuted_ != speakerMuted;
+    bool changed = temporaryMicMuted_ != micMuted ||
+                   temporarySpeakerMuted_ != speakerMuted;
     resetSleepTimer("temporary audio mute");
-    micMuted_ = micMuted;
-    speakerMuted_ = speakerMuted;
+    temporaryMicMuted_ = micMuted;
+    temporarySpeakerMuted_ = speakerMuted;
     if (speakerReady_) speaker_.setVolume(effectiveSpeakerVolume());
-    if (speakerMuted_) cancelPlayback();
+    if (effectiveSpeakerMuted()) cancelPlayback();
     if (changed) display_.setDirty();
 }
 
@@ -1021,7 +1021,7 @@ void AIAvatar::runMicCapture() {
                 continue;
             }
 
-            if (!micMuted_ && ws_.isConnected() && !serverProcessing_) {
+            if (!effectiveMicMuted() && ws_.isConnected() && !serverProcessing_) {
                 if (hasSpeech(micBuf, config_.micBufferSamples)) {
                     if (visualEffects_.showVoiceDetected(350)) {
                         display_.setDirty();
@@ -1636,8 +1636,16 @@ uint8_t AIAvatar::nearestVolumeLevel(uint8_t volume) const {
     return bestIndex;
 }
 
+bool AIAvatar::effectiveMicMuted() const {
+    return micMuted_ || temporaryMicMuted_;
+}
+
+bool AIAvatar::effectiveSpeakerMuted() const {
+    return speakerMuted_ || temporarySpeakerMuted_;
+}
+
 uint8_t AIAvatar::effectiveSpeakerVolume() const {
-    return speakerMuted_ ? 0 : volume_;
+    return effectiveSpeakerMuted() ? 0 : volume_;
 }
 
 bool AIAvatar::readMicFrameStatic(int16_t* dest, void* context) {
@@ -1654,7 +1662,7 @@ void AIAvatar::onAudioChunkStatic(const IncomingAudioChunk& chunk) {
     if (!s_instance || !s_instance->serverProcessing_) return;
     if (!s_instance->speakerReady_) return;
     SpeakerOutput& speaker = s_instance->speaker_;
-    if (s_instance->speakerMuted_) {
+    if (s_instance->effectiveSpeakerMuted()) {
         if (chunk.pcmData && chunk.pcmSamples > 0) {
             s_instance->visualEffects_.setProcessing(false);
             s_instance->visualEffects_.clearToolPulse();
@@ -1687,7 +1695,7 @@ void AIAvatar::onFinalStatic() {
     s_instance->visualEffects_.clearToolPulse();
     s_instance->display_.setDirty();
     if (s_instance->config_.fastStartup) s_instance->heavyDeferredResumeMs_ = millis() + 500;
-    if (s_instance->speakerReady_ && !s_instance->speakerMuted_ &&
+    if (s_instance->speakerReady_ && !s_instance->effectiveSpeakerMuted() &&
         (s_instance->speaker_.queuedSamples() > 0 || s_instance->speaker_.isPlaying())) {
         s_instance->speaker_.enqueueEnd();
     }

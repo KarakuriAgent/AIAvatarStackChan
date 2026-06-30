@@ -82,8 +82,6 @@ SystemUIController::SystemUIController()
       settingsHoldActive_(false),
       buttonNavigationActive_(false),
       uiAudioMuteActive_(false),
-      uiAudioMuteSavedMic_(false),
-      uiAudioMuteSavedSpeaker_(false),
       atomSettingMode_(AtomSettingMode::HomeMute),
       atomSettingLastInputMs_(0),
       atomFeedbackUntilMs_(0),
@@ -1112,18 +1110,14 @@ void SystemUIController::updateAtomSettingMode() {
 
 void SystemUIController::beginUiAudioMute() {
     if (!avatar_ || uiAudioMuteActive_) return;
-    uiAudioMuteSavedMic_ = avatar_->isMicMuted();
-    uiAudioMuteSavedSpeaker_ = avatar_->isSpeakerMuted();
     uiAudioMuteActive_ = true;
     avatar_->setTemporaryAudioMute(true, true);
 }
 
 void SystemUIController::restoreUiAudioMuteIfIdle() {
     if (!avatar_ || !uiAudioMuteActive_ || uiAudioMuteRequired()) return;
-    bool mic = uiAudioMuteSavedMic_;
-    bool speaker = uiAudioMuteSavedSpeaker_;
     uiAudioMuteActive_ = false;
-    avatar_->setTemporaryAudioMute(mic, speaker);
+    avatar_->setTemporaryAudioMute(false, false);
 }
 
 bool SystemUIController::uiAudioMuteRequired() const {
@@ -1946,6 +1940,7 @@ void SystemUIController::adjustBrightness(int8_t delta) {
 
 void SystemUIController::adjustSpeakerVolume(int8_t delta) {
     int pct = clampPercent(byteToPercent(avatar_->currentVolume()) + delta);
+    if (avatar_->isSpeakerMuted()) avatar_->setSpeakerMuted(false);
     avatar_->setVolume(percentToByte(static_cast<uint8_t>(pct)));
 }
 

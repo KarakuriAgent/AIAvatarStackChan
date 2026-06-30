@@ -170,6 +170,8 @@ private:
 
     volatile bool micMuted_;
     volatile bool speakerMuted_;
+    volatile bool temporaryMicMuted_;
+    volatile bool temporarySpeakerMuted_;
     volatile bool serverProcessing_;
     volatile bool wsConnectPending_;
     volatile bool wsDisconnectPending_;
@@ -273,6 +275,8 @@ private:
     void updatePersistedSettings();
     uint8_t findConfiguredWifiNetworkIndex() const;
     uint8_t nearestVolumeLevel(uint8_t volume) const;
+    bool effectiveMicMuted() const;
+    bool effectiveSpeakerMuted() const;
     uint8_t effectiveSpeakerVolume() const;
     bool hasSpeech(const int16_t* samples, size_t sampleCount) const;
     static bool readMicFrameStatic(int16_t* dest, void* context);

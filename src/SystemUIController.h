@@ -136,8 +136,6 @@ private:
     bool settingsHoldActive_;
     bool buttonNavigationActive_;
     bool uiAudioMuteActive_;
-    bool uiAudioMuteSavedMic_;
-    bool uiAudioMuteSavedSpeaker_;
     AtomSettingMode atomSettingMode_;
     uint32_t atomSettingLastInputMs_;
     uint32_t atomFeedbackUntilMs_;
